@@ -1,5 +1,5 @@
 import Foundation
-@testable import SecondShotCore
+import SecondShotCore
 
 /// Hand-auditable fixtures shared by the domain tests.
 enum Fixture {

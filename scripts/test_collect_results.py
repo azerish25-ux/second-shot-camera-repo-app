@@ -17,7 +17,13 @@ def summary(total=25, passed=25, failed=0, skipped=0, result="Passed"):
     }
 
 
-NAMES = {"SecondShotAppTests", "SecondShotUITests", "testExample", "Test Suite"}
+NAMES = {
+    "SecondShotCoreTests",
+    "SecondShotAppTests",
+    "SecondShotUITests",
+    "testExample",
+    "Test Suite",
+}
 
 
 def passed(checks):
@@ -46,6 +52,13 @@ class EvaluateTests(unittest.TestCase):
         checks = collect_results.evaluate(summary(), {"SecondShotAppTests"}, 7, None)
         failing = [check["name"] for check in checks if not check["passed"]]
         self.assertIn("suite-SecondShotUITests", failing)
+
+    def test_missing_domain_suite_fails(self):
+        checks = collect_results.evaluate(
+            summary(), {"SecondShotAppTests", "SecondShotUITests"}, 7, None
+        )
+        failing = [check["name"] for check in checks if not check["passed"]]
+        self.assertIn("suite-SecondShotCoreTests", failing)
 
     def test_missing_screenshots_fail(self):
         checks = collect_results.evaluate(summary(), NAMES, 2, None)

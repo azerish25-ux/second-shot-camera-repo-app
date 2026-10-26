@@ -29,6 +29,9 @@ REQUIRED_FILES = [
     "docs/WORKING_AGREEMENT.md",
     "docs/templates/PHASE_REPORT.md",
     "docs/testing/DEVICE_VALIDATION.md",
+    "docs/testing/phase-01-protocol.md",
+    "docs/testing/interview-guide.md",
+    "docs/testing/consent-and-data-handling.md",
     "docs/release/RELEASE_CHECKLIST.md",
     "docs/design/README.md",
     "docs/design/DESIGN_SYSTEM.md",
@@ -78,6 +81,46 @@ PHASE_FILES = [
     "22-app-store-release.md",
     "23-launch-and-maintenance.md",
 ]
+
+# Phase 01 requires a frozen protocol whose declared invariants cannot quietly
+# disappear. Markers are matched against whitespace-stripped, lower-cased text so
+# wording and line wrapping stay free while the substance is pinned.
+PHASE_01_DOCUMENTS = {
+    "docs/testing/phase-01-protocol.md": [
+        "protocolversion",
+        "falsifi",
+        "60predeclaredevaluationcases",
+        "30guided",
+        "30unaided",
+        "counterbalanc",
+        "two-attempt",
+        "firstattemptsuccessrate",
+        "budgetedcasesuccessrate",
+        "stoprules",
+        "restricted",
+        "withdrawal",
+        "non-lidar",
+        "ios17",
+        "07-reference-capture.md",
+        "15-device-proof-gate.md",
+    ],
+    "docs/testing/interview-guide.md": [
+        "notused",
+        "pastbehaviour",
+        "willingnesstopay",
+        "participantcode",
+        "synthetic",
+    ],
+    "docs/testing/consent-and-data-handling.md": [
+        "notinforce",
+        "retention",
+        "withdraw",
+        "rehearsal",
+    ],
+}
+
+SCENARIO_ROW_RE = re.compile(r"^\|\s*(S[123])\s*\|", re.MULTILINE)
+RESULTS_LINK_RE = re.compile(r"\((?:\.\./)?reports/(phase-01[^)\s]*)\)")
 
 LINK_RE = re.compile(r"(?<!\!)\[[^\]]*\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
 FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
@@ -139,6 +182,50 @@ def check_phase_files(root: Path, report: Report) -> None:
     unexpected = present - set(PHASE_FILES)
     if unexpected:
         report.note(f"Additional phase documents present: {', '.join(sorted(unexpected))}")
+
+
+def normalize_marker(text: str) -> str:
+    return re.sub(r"\s+", "", text).lower()
+
+
+def check_validation_protocol(root: Path, report: Report) -> None:
+    """Phase 01's protocol must keep its declared substance and honesty status.
+
+    Guards two failure modes: quietly dropping a registered invariant (sample
+    size, metrics, stop rules, gate links) and reporting a study as executed
+    without a sanitized results report behind it.
+    """
+    for relative, markers in PHASE_01_DOCUMENTS.items():
+        path = root / relative
+        if not path.exists():
+            report.error(f"Missing phase-01 document: {relative}")
+            continue
+        normalized = normalize_marker(path.read_text(encoding="utf-8"))
+        for marker in markers:
+            if marker not in normalized:
+                report.error(f"{relative} is missing required content: {marker!r}")
+
+    protocol = root / "docs/testing/phase-01-protocol.md"
+    if not protocol.exists():
+        return
+    text = protocol.read_text(encoding="utf-8")
+
+    declared = set(SCENARIO_ROW_RE.findall(text))
+    for scenario in ("S1", "S2", "S3"):
+        if scenario not in declared:
+            report.error(f"Phase-01 protocol is missing the {scenario} scenario row")
+
+    normalized = normalize_marker(text)
+    if "notexecuted" not in normalized:
+        links = RESULTS_LINK_RE.findall(text)
+        if not links:
+            report.error(
+                "Phase-01 protocol does not state that the study is unexecuted and "
+                "links no sanitized results report"
+            )
+        for link in links:
+            if not (root / "docs/reports" / Path(link).name).exists():
+                report.error(f"Phase-01 protocol links a missing results report: {link}")
 
 
 def markdown_files(root: Path) -> list[Path]:
@@ -226,6 +313,8 @@ def check_project_spec(root: Path, report: Report) -> None:
         report.error("project.yml does not reference Sources/SecondShotApp")
     if "Tests/SecondShotUITests" not in text:
         report.error("project.yml does not reference the UI test target")
+    if "Tests/SecondShotCoreTests" not in text:
+        report.error("project.yml does not run the core tests on the simulator build")
     if "SecondShotCore" not in text:
         report.error("project.yml does not depend on SecondShotCore")
     for expected_dir in ("Sources/SecondShotApp", "Tests/SecondShotAppTests", "Tests/SecondShotUITests"):
@@ -318,6 +407,7 @@ def main(root: Path = ROOT) -> int:
     report = Report()
     check_required_files(root, report)
     check_phase_files(root, report)
+    check_validation_protocol(root, report)
     check_markdown_links(root, report)
     check_workflows(root, report)
     check_project_spec(root, report)

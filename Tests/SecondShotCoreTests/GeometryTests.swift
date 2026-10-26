@@ -1,5 +1,5 @@
 import XCTest
-@testable import SecondShotCore
+import SecondShotCore
 
 final class GeometryTests: XCTestCase {
     private let tolerance = 1e-9
@@ -34,8 +34,8 @@ final class GeometryTests: XCTestCase {
         XCTAssertEqual(PoseComparator.angularErrorDegrees(rotation, .identity), 180, accuracy: 1e-7)
     }
 
-    func testQuaternionSignEquivalence() {
-        let rotation = try! Quaternion(axis: Vector3(x: 0.3, y: 0.8, z: 0.5), angleRadians: 0.7)
+    func testQuaternionSignEquivalence() throws {
+        let rotation = try Quaternion(axis: Vector3(x: 0.3, y: 0.8, z: 0.5), angleRadians: 0.7)
         let negated = rotation.negated
         XCTAssertTrue(rotation.isApproximatelyEqual(to: negated))
         XCTAssertEqual(PoseComparator.angularErrorDegrees(rotation, negated), 0, accuracy: 1e-12)

@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
-EXPECTED_SUITES = ("SecondShotAppTests", "SecondShotUITests")
+EXPECTED_SUITES = ("SecondShotCoreTests", "SecondShotAppTests", "SecondShotUITests")
 MIN_ATTACHMENTS = 5
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".heic", ".gif"}
 

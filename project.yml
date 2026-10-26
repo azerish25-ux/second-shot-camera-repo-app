@@ -60,9 +60,26 @@ targets:
         SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
     scheme:
       testTargets:
+        - SecondShotCoreTests
         - SecondShotAppTests
         - SecondShotUITests
       gatherCoverageData: true
+
+  # The same pure-Swift domain tests, compiled against the iOS SDK so the
+  # arithmetic is verified on the simulator build too, not only on the host
+  # toolchain via `swift test`. They use the package product's public API.
+  SecondShotCoreTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests/SecondShotCoreTests
+    dependencies:
+      - package: SecondShot
+        product: SecondShotCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.secondshot.studio.coretests
+        GENERATE_INFOPLIST_FILE: YES
 
   SecondShotAppTests:
     type: bundle.unit-test

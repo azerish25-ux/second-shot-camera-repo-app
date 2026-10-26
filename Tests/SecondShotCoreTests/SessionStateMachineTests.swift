@@ -1,5 +1,5 @@
 import XCTest
-@testable import SecondShotCore
+import SecondShotCore
 
 final class SessionStateMachineTests: XCTestCase {
     private let savedReference = TakeID("reference-take")

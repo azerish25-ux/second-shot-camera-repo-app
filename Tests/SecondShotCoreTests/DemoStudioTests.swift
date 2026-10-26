@@ -1,5 +1,5 @@
 import XCTest
-@testable import SecondShotCore
+import SecondShotCore
 
 final class DemoStudioTests: XCTestCase {
     func testDemoIsLabelledSyntheticEverywhere() throws {

@@ -1,5 +1,5 @@
 import XCTest
-@testable import SecondShotCore
+import SecondShotCore
 
 final class GuidanceTests: XCTestCase {
     private let reference = Fixture.sample(elapsed: 0)

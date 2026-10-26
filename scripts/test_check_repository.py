@@ -123,6 +123,72 @@ class PhaseTests(unittest.TestCase):
             self.assertEqual(len([e for e in report.errors if "Missing phase specification" in e]), 24)
 
 
+class ValidationProtocolTests(unittest.TestCase):
+    def _tree(self, protocol_body: str | None = None) -> Path:
+        directory = Path(tempfile.mkdtemp())
+        (directory / "docs/testing").mkdir(parents=True)
+        (directory / "docs/reports").mkdir(parents=True)
+        for relative, markers in check_repository.PHASE_01_DOCUMENTS.items():
+            body = (
+                "\n".join(markers)
+                + "\nNot executed: no study data exists.\n| S1 | x |\n| S2 | x |\n| S3 | x |\n"
+            )
+            if relative.endswith("phase-01-protocol.md") and protocol_body is not None:
+                body = protocol_body
+            (directory / relative).write_text(body, encoding="utf-8")
+        return directory
+
+    def test_marker_complete_protocol_passes(self):
+        report = check_repository.Report()
+        check_repository.check_validation_protocol(self._tree(), report)
+        self.assertEqual(report.errors, [])
+
+    def test_missing_invariant_is_reported(self):
+        markers = [
+            marker
+            for marker in check_repository.PHASE_01_DOCUMENTS["docs/testing/phase-01-protocol.md"]
+            if marker != "30unaided"
+        ]
+        body = "\n".join(markers) + "\nnot executed\n| S1 |\n| S2 |\n| S3 |\n"
+        report = check_repository.Report()
+        check_repository.check_validation_protocol(self._tree(body), report)
+        self.assertTrue(any("30unaided" in error for error in report.errors))
+
+    def test_missing_scenario_row_is_reported(self):
+        markers = check_repository.PHASE_01_DOCUMENTS["docs/testing/phase-01-protocol.md"]
+        body = "\n".join(markers) + "\nnot executed\n| S1 |\n| S2 |\n"
+        report = check_repository.Report()
+        check_repository.check_validation_protocol(self._tree(body), report)
+        self.assertTrue(any("S3 scenario row" in error for error in report.errors))
+
+    def test_execution_claim_without_results_report_is_rejected(self):
+        markers = check_repository.PHASE_01_DOCUMENTS["docs/testing/phase-01-protocol.md"]
+        body = "\n".join(markers) + "\n| S1 |\n| S2 |\n| S3 |\n"
+        report = check_repository.Report()
+        check_repository.check_validation_protocol(self._tree(body), report)
+        self.assertTrue(any("links no sanitized results report" in error for error in report.errors))
+
+    def test_execution_claim_with_existing_results_report_passes(self):
+        markers = check_repository.PHASE_01_DOCUMENTS["docs/testing/phase-01-protocol.md"]
+        body = (
+            "\n".join(markers)
+            + "\n| S1 |\n| S2 |\n| S3 |\n[results](../reports/phase-01-results.md)\n"
+        )
+        root = self._tree(body)
+        (root / "docs/reports/phase-01-results.md").write_text("sanitized\n", encoding="utf-8")
+        report = check_repository.Report()
+        check_repository.check_validation_protocol(root, report)
+        self.assertEqual(report.errors, [])
+
+    def test_missing_documents_are_reported(self):
+        with tempfile.TemporaryDirectory() as directory:
+            report = check_repository.Report()
+            check_repository.check_validation_protocol(Path(directory), report)
+            self.assertEqual(
+                len([e for e in report.errors if "Missing phase-01 document" in e]), 3
+            )
+
+
 class RepositoryIntegrationTests(unittest.TestCase):
     def test_repository_checks_pass_on_this_tree(self):
         self.assertEqual(check_repository.main(check_repository.ROOT), 0)
