@@ -2,10 +2,14 @@ import Foundation
 import SecondShotCore
 import SwiftUI
 
-/// Drives the synthetic demo journey through the pure `SessionReducer`.
+/// The demo journey's UI state, driven entirely by `SessionCoordinator`.
 ///
-/// The store never fabricates a camera, an AR session or a saved movie: it only
-/// replays a labelled fixture through the same transitions real adapters use.
+/// The store no longer calls the reducer itself: every action goes through the
+/// coordinator, which executes the reducer's effects on injected adapters and
+/// feeds their replies back as events. The adapters are synthetic and labelled on
+/// screen — no camera, AR session, sensor or recorded movie exists in this build —
+/// but the transitions, operation identity, storage writes and writer lifecycle
+/// are the real ones.
 @MainActor
 final class DemoSessionStore: ObservableObject {
     enum Route: Hashable {
@@ -33,20 +37,35 @@ final class DemoSessionStore: ObservableObject {
     }
 
     @Published var route: [Route] = []
-    @Published private(set) var state = SessionState.initial
     @Published private(set) var elapsed: Double = 0
-    @Published private(set) var isRunning = false
     @Published private(set) var referenceTrack: PoseTrack?
     @Published private(set) var retakeTrack: PoseTrack?
     @Published private(set) var lastError: String?
     @Published var reviewMode: ReviewMode = .split
     @Published var isExportSheetPresented = false
 
+    let environment: SessionEnvironment
+
     private var ticker: Task<Void, Never>?
+    private let tickInterval: TimeInterval
+
+    init(
+        environment: SessionEnvironment = .synthetic(
+            profile: SessionFaultProfile.from(ProcessInfo.processInfo.arguments)
+        ),
+        tickInterval: TimeInterval = 0.1
+    ) {
+        self.environment = environment
+        self.tickInterval = tickInterval
+        environment.coordinator.sessionDidChange = { [weak self] _ in
+            self?.sessionStateChanged()
+        }
+    }
+
+    var state: SessionState { environment.coordinator.state }
 
     // MARK: Derived presentation
 
-    /// A saved reference exists, so guidance and review are meaningful.
     var hasReference: Bool {
         switch state.phase {
         case .referenceAvailable, .relocalizing, .guiding, .recordingRetake,
@@ -90,145 +109,186 @@ final class DemoSessionStore: ObservableObject {
         return try? PoseComparator.deviation(reference: reference, candidate: retake)
     }
 
-    // MARK: Intents
+    /// The diagnostic codes the session ended with, exposed for the report.
+    var droppedReplyCount: Int { environment.coordinator.droppedReplies.count }
 
-    func openDemo() {
-        reset()
+    // MARK: Journey
+
+    func openDemo() async {
+        await reset()
         route = [.reference]
     }
 
-    /// Walks the real production path — permission, preparation, reference
-    /// capture — with synthetic adapter replies. No camera, sensor or permission
-    /// API is touched: the adapter answers locally and the screens stay labelled.
-    func simulateReference() {
-        guard state.phase == .idle || state.phase == .ready || state.phase == .referenceAvailable else { return }
-        do {
-            if state.phase == .idle {
-                apply(try SessionReducer.reduce(state, intent: .beginSetup))
-                apply(try SessionReducer.reduce(state, event: .permissionsResolved(granted: true, code: nil)))
-                apply(try SessionReducer.reduce(state, event: .capturePrepared))
-            }
-            apply(try SessionReducer.reduce(state, intent: .beginReference))
-            apply(try SessionReducer.reduce(state, intent: .stopReference))
-            apply(try SessionReducer.reduce(state, event: .referenceSaved(takeID: DemoStudio.referenceTake, token: try requireToken())))
-            referenceTrack = try DemoStudio.referenceTrack()
-            retakeTrack = try DemoStudio.retakeTrack()
-        } catch {
-            fail(error)
+    /// Walks the real production path — permission, preparation, reference capture
+    /// and finalize — through the coordinator. The adapters answer locally; no
+    /// camera, sensor or permission API is touched.
+    func simulateReference() async {
+        let coordinator = environment.coordinator
+        switch state.phase {
+        case .idle, .ready, .referenceAvailable:
+            break
+        case .interrupted:
+            // Deliberate recovery: ask for access again. Nothing resumes by itself.
+            await coordinator.send(.resume)
+        case .failed:
+            await coordinator.send(.retry)
+        default:
+            return
         }
+
+        if coordinator.state.phase == .idle {
+            await coordinator.send(.beginSetup)
+        }
+        guard coordinator.state.phase == .ready else {
+            sessionStateChanged()
+            return
+        }
+
+        await coordinator.send(.beginReference)
+        await coordinator.send(.stopReference)
+
+        if coordinator.state.phase == .referenceAvailable {
+            referenceTrack = try? DemoStudio.referenceTrack()
+            retakeTrack = try? DemoStudio.retakeTrack()
+        }
+        sessionStateChanged()
     }
 
-    func startRetake() {
-        guard state.phase == .referenceAvailable else { return }
-        do {
-            apply(try SessionReducer.reduce(state, intent: .prepareRetake))
-            apply(try SessionReducer.reduce(state, event: .relocalized(token: try requireToken())))
-            apply(try SessionReducer.reduce(state, intent: .startRetake))
-            elapsed = 0
-            if route.last != .guidance { route.append(.guidance) }
-            startTicker()
-        } catch {
-            fail(error)
+    func startRetake() async {
+        let coordinator = environment.coordinator
+        guard coordinator.state.phase == .referenceAvailable else { return }
+        await coordinator.send(.prepareRetake)
+        await coordinator.send(.startRetake)
+        guard coordinator.state.phase == .recordingRetake else {
+            sessionStateChanged()
+            return
         }
+        elapsed = 0
+        if route.last != .guidance { route.append(.guidance) }
+        startTicker()
+        sessionStateChanged()
     }
 
-    /// Ends the retake through the real interruption path. The take is preserved
-    /// as incomplete, so it can never be presented as a finished recording.
-    func interruptTracking() {
+    func stopAndReview() async {
+        let coordinator = environment.coordinator
+        guard coordinator.state.phase == .recordingRetake else { return }
+        let finalElapsed = coordinator.elapsedSeconds
+        stopTicker()
+        await coordinator.send(.stopRetake)
+        elapsed = finalElapsed
+        if coordinator.state.phase == .reviewing, route.last != .review {
+            route.append(.review)
+        }
+        sessionStateChanged()
+    }
+
+    /// Reports that the adapter lost tracking. The reducer ends the attempt and
+    /// keeps it incomplete; this button exists because the synthetic adapter has no
+    /// real sensor to lose tracking on its own.
+    func interruptTracking() async {
         guard state.phase == .recordingRetake else { return }
         stopTicker()
-        do {
-            apply(try SessionReducer.reduce(state, event: .trackingChanged(.unavailable)))
-        } catch {
-            fail(error)
-        }
+        await environment.capture.injectTracking(.unavailable)
+        await environment.coordinator.reportTracking(.unavailable)
+        sessionStateChanged()
     }
 
     /// Deliberate recovery. It never resumes the ended take: the user returns to a
     /// saved reference and can start a fresh attempt.
-    func resumeTracking() {
+    func resumeTracking() async {
         guard state.phase == .interrupted else { return }
-        do {
-            apply(try SessionReducer.reduce(state, intent: .resume))
-            elapsed = 0
-        } catch {
-            fail(error)
-        }
+        await environment.capture.injectTracking(.normal)
+        await environment.coordinator.send(.resume)
+        elapsed = 0
+        sessionStateChanged()
     }
 
     /// Abandons an interrupted attempt and returns to the saved reference.
-    func discardAttempt() {
+    func discardAttempt() async {
         guard state.phase == .interrupted else { return }
         stopTicker()
-        do {
-            apply(try SessionReducer.reduce(state, intent: .cancel))
-            elapsed = 0
-            if route.last == .guidance { route.removeLast() }
-        } catch {
-            fail(error)
-        }
+        await environment.coordinator.send(.cancel)
+        elapsed = 0
+        if route.last == .guidance { route.removeLast() }
+        sessionStateChanged()
     }
 
-    func stopAndReview() {
-        guard state.phase == .recordingRetake else { return }
-        stopTicker()
-        do {
-            apply(try SessionReducer.reduce(state, intent: .stopRetake))
-            apply(try SessionReducer.reduce(state, event: .retakeSaved(takeID: DemoStudio.retakeTake, token: try requireToken())))
-            if route.last != .review { route.append(.review) }
-        } catch {
-            fail(error)
+    /// Runs the real export path. This build has no renderer, so the adapter
+    /// reports `export-unavailable` and the sheet explains it rather than
+    /// pretending a file exists.
+    func openExport() async {
+        if state.phase == .reviewing {
+            await environment.coordinator.send(.beginExport)
         }
+        isExportSheetPresented = true
+        sessionStateChanged()
     }
 
-    func goBack() {
+    func goBack() async {
+        let coordinator = environment.coordinator
         switch route.last {
         case .review:
             stopTicker()
-            applyReviewClose()
+            await coordinator.send(.closeReview)
             route.removeLast()
         case .guidance:
             stopTicker()
-            applyCancellation()
+            await coordinator.cancelIfPossible()
             elapsed = 0
             route.removeLast()
         case .reference:
-            reset()
+            await reset()
         case .none:
             break
         }
+        sessionStateChanged()
     }
 
-    func finishDemo() {
+    func finishDemo() async {
         stopTicker()
-        if state.phase == .reviewing {
-            applyReviewClose()
-        }
-        reset()
+        await environment.coordinator.send(.closeReview)
+        await reset()
     }
 
-    func reset() {
+    /// Called when the app returns to the foreground, which is also how a user
+    /// returns from Settings after changing camera access.
+    func applicationBecameActive() async {
+        await environment.coordinator.applicationBecameActive()
+        sessionStateChanged()
+    }
+
+    func reset() async {
         stopTicker()
-        state = .initial
+        await environment.coordinator.endSession()
         route = []
         elapsed = 0
         reviewMode = .split
         referenceTrack = nil
         retakeTrack = nil
         lastError = nil
+        isExportSheetPresented = false
     }
 
     // MARK: Tick
 
+    /// One UI update: monotonic elapsed time plus one tracking poll. The app calls
+    /// this from the ticker; deterministic tests call it directly instead of
+    /// waiting on the wall clock.
+    func tick() async {
+        await environment.coordinator.pollTracking()
+        if state.phase.isRecording {
+            elapsed = environment.coordinator.elapsedSeconds
+        }
+        sessionStateChanged()
+    }
+
     private func startTicker() {
         stopTicker()
-        isRunning = true
         ticker = Task { [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 100_000_000)
-                guard let self else { return }
-                if Task.isCancelled { return }
-                self.tick()
+            while let self, !Task.isCancelled {
+                await self.tick()
+                if self.state.phase != .recordingRetake { break }
+                try? await Task.sleep(nanoseconds: UInt64(self.tickInterval * 1_000_000_000))
             }
         }
     }
@@ -236,58 +296,31 @@ final class DemoSessionStore: ObservableObject {
     private func stopTicker() {
         ticker?.cancel()
         ticker = nil
-        isRunning = false
     }
 
-    private func requireToken() throws -> OperationToken {
-        guard let token = state.token else {
-            // The synthetic adapter has no result to report if the reducer is not
-            // waiting for one; this is a defect, not a success.
-            throw SessionError.illegalTransition(from: state.phase, intent: "syntheticAdapterResult")
+    // MARK: Mirroring
+
+    private func sessionStateChanged() {
+        lastError = failureMessage
+    }
+
+    /// A user-facing reason the session stopped, derived from the state the
+    /// reducer produced. Adapter codes are content-free by construction.
+    private var failureMessage: String? {
+        if let interruption = state.interruption {
+            switch interruption {
+            case .trackingLost:
+                // The guidance screen carries the fuller explanation.
+                return nil
+            case .cameraDenied, .appBackgrounded, .deviceLocked, .storageLow,
+                 .thermalPressure, .writerFailure, .sceneNotRecognized:
+                return interruption.explanation
+            }
         }
-        return token
-    }
-
-    private func tick() {
-        guard state.phase == .recordingRetake else { return }
-        let next = elapsed + 0.1
-        if next >= DemoStudio.projectedDurationSeconds {
-            elapsed = DemoStudio.projectedDurationSeconds
-            stopTicker()
-        } else {
-            elapsed = next
+        if state.phase == .failed {
+            let code = state.diagnosticCode ?? "adapter-failure"
+            return "The take was not saved (\(code)). Nothing was published and the saved reference is unchanged."
         }
-    }
-
-    // MARK: Reducer plumbing
-
-    private func apply(_ transition: SessionTransition) {
-        lastError = nil
-        state = transition.state
-        // Synthetic adapters have no side effects to execute. Effects are kept by
-        // the reducer so the same transitions can drive real capture later.
-    }
-
-    private func applyReviewClose() {
-        if let transition = try? SessionReducer.reduce(state, intent: .closeReview) {
-            apply(transition)
-        }
-    }
-
-    private func applyCancellation() {
-        if let transition = try? SessionReducer.reduce(state, intent: .cancel) {
-            apply(transition)
-        }
-    }
-
-    private func fail(_ error: Error) {
-        stopTicker()
-        if let sessionError = error as? SessionError {
-            lastError = sessionError.description
-        } else if let poseError = error as? PoseError {
-            lastError = poseError.description
-        } else {
-            lastError = "The demo could not continue."
-        }
+        return environment.coordinator.lastError
     }
 }

@@ -10,7 +10,7 @@ struct DemoGuidanceView: View {
             SSColor.canvas.ignoresSafeArea()
 
             VStack(spacing: 0) {
-                DemoTopBar(title: "Guided retake", onBack: { store.goBack() }) {
+                DemoTopBar(title: "Guided retake", onBack: { Task { await store.goBack() } }) {
                     TrackingBadge(
                         availability: store.isTrackingLost ? .unavailable : .normal,
                         detail: store.isTrackingLost ? "Demo paused" : "Synthetic"
@@ -37,7 +37,7 @@ struct DemoGuidanceView: View {
         }
         .toolbar(.hidden, for: .navigationBar)
         .onDisappear {
-            if store.route.isEmpty { store.finishDemo() }
+            if store.route.isEmpty { Task { await store.finishDemo() } }
         }
     }
 
@@ -198,7 +198,7 @@ struct DemoGuidanceView: View {
 
             if store.isRecordingRetake {
                 Button {
-                    store.stopAndReview()
+                    Task { await store.stopAndReview() }
                 } label: {
                     Label("Stop and review", systemImage: "stop.fill")
                 }
@@ -207,7 +207,7 @@ struct DemoGuidanceView: View {
                 .accessibilityHint("Ends the synthetic retake and opens review.")
 
                 Button {
-                    store.interruptTracking()
+                    Task { await store.interruptTracking() }
                 } label: {
                     Label("Simulate tracking loss", systemImage: "exclamationmark.triangle")
                 }
@@ -216,7 +216,7 @@ struct DemoGuidanceView: View {
                 .accessibilityHint("Shows the unavailable state used when tracking fails.")
             } else if store.isTrackingLost {
                 Button {
-                    store.resumeTracking()
+                    Task { await store.resumeTracking() }
                 } label: {
                     Label("Return to the saved reference", systemImage: "arrow.clockwise")
                 }
@@ -224,7 +224,7 @@ struct DemoGuidanceView: View {
                 .accessibilityIdentifier("demo.tracking.resume")
 
                 Button {
-                    store.discardAttempt()
+                    Task { await store.discardAttempt() }
                 } label: {
                     Text("Discard this attempt")
                 }
@@ -232,7 +232,7 @@ struct DemoGuidanceView: View {
                 .accessibilityIdentifier("demo.attempt.discard")
             } else {
                 Button {
-                    store.startRetake()
+                    Task { await store.startRetake() }
                 } label: {
                     Label("Start retake", systemImage: "record.circle")
                 }

@@ -114,7 +114,7 @@ struct LibraryView: View {
     private var actions: some View {
         VStack(alignment: .leading, spacing: SSSpace.s) {
             Button {
-                store.openDemo()
+                Task { await store.openDemo() }
             } label: {
                 Label("Explore demo", systemImage: "play.fill")
             }

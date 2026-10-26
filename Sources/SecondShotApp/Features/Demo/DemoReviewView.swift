@@ -9,7 +9,7 @@ struct DemoReviewView: View {
             SSColor.canvas.ignoresSafeArea()
 
             VStack(spacing: 0) {
-                DemoTopBar(title: "Review", onBack: { store.goBack() }) {
+                DemoTopBar(title: "Review", onBack: { Task { await store.goBack() } }) {
                     ModeBadge()
                         .accessibilityIdentifier("demo.badge")
                 }
@@ -37,7 +37,7 @@ struct DemoReviewView: View {
                 .presentationDetents([.medium])
         }
         .onDisappear {
-            if store.route.isEmpty { store.finishDemo() }
+            if store.route.isEmpty { Task { await store.finishDemo() } }
         }
     }
 
@@ -215,7 +215,9 @@ struct DemoReviewView: View {
     private var actions: some View {
         VStack(alignment: .leading, spacing: SSSpace.s) {
             Button {
-                store.isExportSheetPresented = true
+                // Runs the real export path so the session says why it is
+                // unavailable instead of a sheet that asserts it.
+                Task { await store.openExport() }
             } label: {
                 Label("Export", systemImage: "square.and.arrow.up")
             }
@@ -224,7 +226,7 @@ struct DemoReviewView: View {
             .accessibilityHint("Explains why export is unavailable in this build.")
 
             Button {
-                store.finishDemo()
+                Task { await store.finishDemo() }
             } label: {
                 Text("Keep originals and finish")
             }

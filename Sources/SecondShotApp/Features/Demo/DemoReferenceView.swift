@@ -9,7 +9,7 @@ struct DemoReferenceView: View {
             SSColor.canvas.ignoresSafeArea()
 
             VStack(spacing: 0) {
-                DemoTopBar(title: "Demo studio", onBack: { store.goBack() }) {
+                DemoTopBar(title: "Demo studio", onBack: { Task { await store.goBack() } }) {
                     ModeBadge()
                         .accessibilityIdentifier("demo.badge")
                 }
@@ -32,9 +32,9 @@ struct DemoReferenceView: View {
         }
         .toolbar(.hidden, for: .navigationBar)
         .onDisappear {
-            // The demo owns no media; leaving the stage must not leave a timer or
-            // a half-finished synthetic take running.
-            if store.route.isEmpty { store.finishDemo() }
+            // Leaving the stage must not leave a ticker or an open synthetic writer
+            // behind; the coordinator abandons the capture deliberately.
+            if store.route.isEmpty { Task { await store.finishDemo() } }
         }
     }
 
@@ -104,6 +104,7 @@ struct DemoReferenceView: View {
                 message: error,
                 tone: .caution
             )
+            .accessibilityIdentifier("session.failure")
         }
 
         if store.hasReference {
@@ -116,7 +117,7 @@ struct DemoReferenceView: View {
                 .accessibilityIdentifier("reference.ready")
 
                 Button {
-                    store.startRetake()
+                    Task { await store.startRetake() }
                 } label: {
                     Label("Start demo retake", systemImage: "arrow.uturn.backward")
                 }
@@ -128,7 +129,7 @@ struct DemoReferenceView: View {
         } else {
             VStack(alignment: .leading, spacing: SSSpace.s) {
                 Button {
-                    store.simulateReference()
+                    Task { await store.simulateReference() }
                 } label: {
                     Label("Simulate reference", systemImage: "circle.dashed")
                 }

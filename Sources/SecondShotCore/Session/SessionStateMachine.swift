@@ -16,7 +16,11 @@ public struct OperationID: Hashable, Sendable, Codable, CustomStringConvertible 
 /// An operation identity plus the generation it belongs to. The generation
 /// advances whenever the session abandons work (cancel, interruption, retry,
 /// resume), so stale completions can never match.
-public struct OperationToken: Equatable, Sendable, Codable {
+///
+/// It is `Hashable` because platform adapters index their in-flight operations by
+/// it: an attempt must be findable later so a late cancellation can still discard
+/// exactly that attempt's media and record.
+public struct OperationToken: Hashable, Sendable, Codable {
     public let operationID: OperationID
     public let generation: Int
 
@@ -125,6 +129,9 @@ public enum SessionEvent: Equatable, Sendable {
     case preparationFailed(code: String)
     case referenceSaved(takeID: TakeID, token: OperationToken)
     case referenceFailed(code: String, token: OperationToken)
+    /// The writer could not even be created for a take that was already running.
+    /// Distinct from `referenceFailed`, which means finalization failed.
+    case captureFailed(code: String, token: OperationToken)
     case relocalized(token: OperationToken)
     case relocalizationFailed(reason: InterruptionReason, token: OperationToken)
     case retakeSaved(takeID: TakeID, token: OperationToken)
@@ -480,6 +487,26 @@ public enum SessionReducer {
             next.phase = .failed
             next.diagnosticCode = code
             return SessionTransition(state: next, effects: [.stopSensors])
+
+        case let (.recordingReference, .captureFailed(code, token)):
+            try require(token, in: state)
+            var next = state.abandoning()
+            next.phase = .failed
+            next.diagnosticCode = code
+            return SessionTransition(
+                state: next,
+                effects: [.stopReferenceCapture(token: token), .preserveIncompleteTake(takeID: nil), .stopSensors]
+            )
+
+        case let (.recordingRetake, .captureFailed(code, token)):
+            try require(token, in: state)
+            var next = state.abandoning()
+            next.phase = .failed
+            next.diagnosticCode = code
+            return SessionTransition(
+                state: next,
+                effects: [.stopRetakeCapture(token: token), .preserveIncompleteTake(takeID: state.referenceTakeID), .stopSensors]
+            )
 
         case let (.relocalizing, .relocalized(token)):
             try require(token, in: state)

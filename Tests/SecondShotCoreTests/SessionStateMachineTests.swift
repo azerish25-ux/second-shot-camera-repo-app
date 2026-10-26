@@ -193,6 +193,73 @@ final class SessionStateMachineTests: XCTestCase {
         XCTAssertNil(failed.state.token)
     }
 
+    /// A writer that cannot even be created is a different failure from one that
+    /// fails while finalizing, and it must end the attempt with the incomplete
+    /// media preserved exactly once.
+    func testWriterCreationFailureStopsCaptureAndPreservesTheIncompleteTake() throws {
+        let recording = SessionState(phase: .recordingReference, token: token("reference", 1), generation: 1)
+        let failed = try SessionReducer.reduce(
+            recording,
+            event: .captureFailed(code: "writer-create-4", token: token("reference", 1))
+        )
+        XCTAssertEqual(failed.state.phase, .failed)
+        XCTAssertEqual(failed.state.diagnosticCode, "writer-create-4")
+        XCTAssertNil(failed.state.referenceTakeID)
+        XCTAssertNil(failed.state.token)
+        XCTAssertEqual(
+            failed.effects,
+            [
+                .stopReferenceCapture(token: token("reference", 1)),
+                .preserveIncompleteTake(takeID: nil),
+                .stopSensors
+            ]
+        )
+    }
+
+    func testWriterCreationFailureDuringARetakeKeepsTheReferenceAndTheComingTake() throws {
+        let recording = SessionState(
+            phase: .recordingRetake,
+            referenceTakeID: savedReference,
+            token: token("retake", 3),
+            generation: 3
+        )
+        let failed = try SessionReducer.reduce(
+            recording,
+            event: .captureFailed(code: "writer-create-5", token: token("retake", 3))
+        )
+        XCTAssertEqual(failed.state.phase, .failed)
+        XCTAssertEqual(failed.state.referenceTakeID, savedReference)
+        XCTAssertNil(failed.state.retakeTakeID)
+        XCTAssertEqual(
+            failed.effects,
+            [
+                .stopRetakeCapture(token: token("retake", 3)),
+                .preserveIncompleteTake(takeID: savedReference),
+                .stopSensors
+            ]
+        )
+        // A retry returns to the saved reference; it never resumes the failed take.
+        let retried = try SessionReducer.reduce(failed.state, intent: .retry)
+        XCTAssertEqual(retried.state.phase, .referenceAvailable)
+        XCTAssertNil(retried.state.interruption)
+        XCTAssertNil(retried.state.diagnosticCode)
+    }
+
+    func testACaptureFailureCarryingAnOlderGenerationIsRefusedAsStale() throws {
+        let recording = SessionState(phase: .recordingReference, token: token("reference", 2), generation: 2)
+        XCTAssertThrowsError(
+            try SessionReducer.reduce(
+                recording,
+                event: .captureFailed(code: "writer-create-1", token: token("reference", 1))
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? SessionError,
+                .staleOperation(expected: self.token("reference", 2), received: self.token("reference", 1))
+            )
+        }
+    }
+
     // MARK: - Stale results and operation identity
 
     func testStaleWriterResultCannotPublishIntoANewerAttempt() throws {
