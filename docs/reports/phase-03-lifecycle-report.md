@@ -93,8 +93,29 @@ attempt is **not** offered as a reviewable take.
 | `python3 -B -m unittest discover -s scripts -p 'test_*.py'` | Python 3.12.3 | 39 tests, 0 failures | local run |
 | `python3 -B scripts/ci/check_repository.py` | same host | passed | local run |
 | `swiftc -parse` over app and app/UI test sources | Swift 6.0.3 | syntax parse only, not a build | local run |
-| Repository checks workflow | GitHub Actions | PENDING OBSERVATION | run linked in [STATUS](../STATUS.md) |
-| iOS Simulator workflow (compile + core/app/UI suites) | macos-26, Xcode 26.6 | PENDING OBSERVATION | run linked in [STATUS](../STATUS.md) |
+| Repository checks on `1144e7b` | GitHub Actions, ubuntu runner | **success** | [run 40375022689](https://github.com/azerish25-ux/second-shot-camera-repo-app/actions/runs/40375022689) |
+| iOS Simulator workflow on `1144e7b` (compile + core/app/UI suites) | macos-26, workflow-selected Xcode 26.x | **success**: all steps green, including the evidence validator that requires the core, app and UI suites | [run 40375022861](https://github.com/azerish25-ux/second-shot-camera-repo-app/actions/runs/40375022861) |
+
+Two infrastructure failures were found and fixed inside this step, and both are
+part of the record rather than rewritten away:
+
+1. `03464ba` failed the iOS Simulator workflow at step 3 in 18 seconds: the runner
+   no longer matched the hardcoded exact-Xcode assertion. The immediately preceding
+   run on `3912918` had passed that same step, so the `macos-26` image rolled under
+   the workflow between 17:14 and 17:53 with no repository change. The pin was
+   replaced by a deliberate selection: prefer `Xcode_26.6.app`, otherwise the newest
+   installed `Xcode_26*.app`, export the choice to later steps, and fail with the
+   full `/Applications` inventory if no 26.x exists. The inventory, the selected
+   path and the failure diagnostics are now written to the job summary, so a future
+   drift is diagnosable from the public run page instead of requiring a log download.
+2. The evidence validator (`collect_results.py`) had to be checked against the new
+   bundle: it now requires `SecondShotCoreTests` alongside the app and UI suites, so
+   a green run means all three suites really executed.
+
+The exact Xcode build selected on `1144e7b` is recorded in that run's job summary.
+This environment has no browser and no authenticated `gh`, so the summary text could
+not be read back; the conclusion itself was verified from the run's completion state
+and per-step conclusions via the public API.
 
 Failures found and fixed while building this slice (all in the new test code, none
 by weakening the implementation):
@@ -124,6 +145,9 @@ by weakening the implementation):
 - Interruptions arriving *during* finalization preserve the take as incomplete but
   cannot yet be shown to keep the original file intact; that needs phase 04 storage
   and phase 07 device evidence.
+- The passing simulator run proves the app compiles and the updated journeys pass on
+  a simulator. It cannot prove device interruption delivery, background or thermal
+  behaviour, and it says nothing about real capture.
 - Project switching during a slow operation is covered only through the operation
   generation and the export project guard. There is no multi-project coordinator
   yet, so a full "switch while exporting" journey has not been exercised.

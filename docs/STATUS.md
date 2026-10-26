@@ -8,7 +8,8 @@ from the planned product. Read the linked run/report evidence before making a cl
 Phases 00–02 are complete or frozen and on `main`; phase 03 is in progress.
 Code commits: `dd65b67`, `1f2fa23`, `201acb5` (phase 00 foundation), `3912918`
 (phase 01 protocol, phase 02 fixtures, simulator core-test bundle), `068b4be`
-(phase 00–02 evidence), plus the phase-03 lifecycle commit recorded below.
+(phase 00–02 evidence), `03464ba` (phase 03 lifecycle), `1144e7b` (CI toolchain
+selection). The currently verified head is `1144e7b`.
 
 - [Phase 00 report](reports/phase-00-foundation-report.md).
 - [Phase 01 report](reports/phase-01-validation-protocol-report.md) — protocol
@@ -16,11 +17,17 @@ Code commits: `dd65b67`, `1f2fa23`, `201acb5` (phase 00 foundation), `3912918`
 - [Phase 02 report](reports/phase-02-pose-math-report.md) — arithmetic complete.
 - [Phase 03 report](reports/phase-03-lifecycle-report.md) — session model and
   interruption rules done; coordinator adapter outstanding.
-- Repository checks on `068b4be`: [run 40368183164](https://github.com/azerish25-ux/second-shot-camera-repo-app/actions/runs/40368183164) — success.
-- iOS Simulator CI on `068b4be`: [run 40368182795](https://github.com/azerish25-ux/second-shot-camera-repo-app/actions/runs/40368182795) — **success** in 4 m 49 s: all eleven steps green,
-  including the evidence validator that now requires the core, app and UI suites.
-  The equivalent runs on `3912918` also passed (simulator 11 m 20 s, repository
-  checks 5 s).
+- Repository checks on `1144e7b`: [run 40375022689](https://github.com/azerish25-ux/second-shot-camera-repo-app/actions/runs/40375022689) — success.
+- iOS Simulator CI on `1144e7b`: [run 40375022861](https://github.com/azerish25-ux/second-shot-camera-repo-app/actions/runs/40375022861) — **success**: every step green, including the
+evidence validator that requires the core, app and UI suites. Runs on `068b4be`
+(simulator 4 m 49 s) and `3912918` (simulator 11 m 20 s) also passed.
+- CI infrastructure incident, recorded rather than hidden: run `40372804681` on
+  `03464ba` failed at the toolchain step in 18 s because the `macos-26` image rolled
+  between 17:14 and 17:53 and no longer matched the hardcoded exact-Xcode assertion.
+  `1144e7b` replaces it with a reviewed selection: prefer Xcode 26.6, else the newest
+  installed 26.x, export the choice, and fail with the full `/Applications` inventory
+  when no 26.x exists. The inventory, selected path and failure diagnostics now go to
+  the job summary. Policy in [CI_WORKFLOW](CI_WORKFLOW.md).
 
 ### Local verification on this development host
 
@@ -70,6 +77,7 @@ demo's reducer only. The demo requests no camera, microphone or analytics access
 | Scope | Status | Evidence / remaining work |
 | --- | --- | --- |
 | 00 — Foundation | PARTIAL | Implementation, repository checks and simulator CI pass; the screenshot **content** review of G0 is still outstanding because the artifact needs authenticated download |
+| CI baseline | GREEN | Repository checks and the simulator workflow (build, core/app/UI suites, evidence validation) pass on `1144e7b`; the toolchain step now tolerates runner-image drift without accepting an unreviewed major version |
 | 01 — Product validation | PARTIAL | Protocol, interview guide and consent material frozen and machine-checked on `3912918`; no participant, no data, and the independent human-review check has not been run. Owner approval is required before any outreach |
 | 02 — Pose math | COMPLETE | Arithmetic and fixture criteria met with observed evidence on `3912918`; no device evidence is required by this phase |
 | 03 — Lifecycle/state machine | PARTIAL | Production phases, operation identity, staleness/foreign-project rejection, per-phase interruption and cancellation are implemented and unit-tested; the app-side coordinator with injected providers and the simulator fault journey are missing |
