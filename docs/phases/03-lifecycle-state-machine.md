@@ -34,8 +34,29 @@ Provisional responsiveness target: a UI cancellation is acknowledged within 200 
 
 Crash recovery must not infer that `recording` means a valid playable asset exists. Reconcile persisted incomplete records on launch. Errors must include a user-safe action and a diagnostic code without private room or media content.
 
-- [ ] Transition table and explicit illegal transitions reviewed.
-- [ ] Stale results cannot affect a newer operation.
-- [ ] No unbounded tasks, hidden recordings, or detached work with lost ownership.
-- [ ] CI logs, deterministic scenarios, and unresolved device cases recorded.
-- [ ] Coordinator commits/pushes a coherent checkpoint after review.
+## Evidence observed
+
+Status: **PARTIAL**. Recorded in [the phase-03 report](../reports/phase-03-lifecycle-report.md)
+and [STATUS](../STATUS.md); read them before making any claim.
+
+- The transition table, illegal transitions, double taps, out-of-order callbacks,
+  cancellation before and after writer finalization and interruption in every busy
+  phase are covered by `Tests/SecondShotCoreTests/SessionStateMachineTests.swift`
+  and `Tests/SecondShotAppTests/SessionCoordinatorJourneyTests.swift`.
+- Stale and foreign replies are refused before they can change state and are
+  recorded as dropped; a take whose reply is no longer wanted is never published.
+- Cancellation latency is measured with the injected clock: 35.0 ms on both the
+  recording and finalizing paths against the 200 ms budget. The adapter costs are
+  modelled, not measured on a device.
+- The simulation is not device evidence: no camera, AR session or real movie exists.
+
+Not yet evidenced: project switching during a slow operation, and launch
+reconciliation of interrupted records (phase 04 owns project packages and recovery).
+
+## Checklist
+
+- [x] Transition table and explicit illegal transitions reviewed.
+- [x] Stale results cannot affect a newer operation.
+- [x] No unbounded tasks, hidden recordings, or detached work with lost ownership.
+- [x] CI logs, deterministic scenarios, and unresolved device cases recorded.
+- [x] Coordinator commits/pushes a coherent checkpoint after review.

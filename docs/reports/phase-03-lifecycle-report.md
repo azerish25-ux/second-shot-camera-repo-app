@@ -1,176 +1,257 @@
 # Phase 03 — lifecycle, effects, operation identity
 
-Status: **PARTIAL**. The production session model, its effects, cancellation and
-staleness rules are implemented and tested, and the app's synthetic demo now drives
-that real path. The platform `SessionCoordinator` adapter and injected-provider
-fault journeys are still missing.
+Status: **PARTIAL**. The production lifecycle, the platform adapter that executes
+its effects, the injected providers, the storage actor, the serialized media queue
+and the fault journeys all exist and are evidenced. Two acceptance items remain
+open and are named in [Residual gaps](#residual-gaps): project switching during a
+slow operation, and launch reconciliation of persisted incomplete records (phase 04
+owns project packages and recovery).
+
+Nothing in this report is physical-device evidence. No camera, microphone, AR
+session, sensor or real movie exists yet, and no accuracy or precision claim is made.
 
 ## Scope and prerequisites
 
 - Phase specification: [phase 03](../phases/03-lifecycle-state-machine.md).
   Prerequisites: [phase 02](phase-02-pose-math-report.md) (complete),
   [capture contract](../architecture/capture-and-coordinates.md) §4–5.
-- Tested commit: recorded in [STATUS](../STATUS.md) and in the run table below.
-- Implemented: the complete production state vocabulary, intent/event separation,
-  declarative effects carrying operation identity, deterministic operation tokens,
-  stale-result and foreign-project rejection, per-phase interruption effects,
-  cancellation before and after writer finalization, permission and preparation
-  failure paths, and the engine-facing UI that renders them.
-- Deliberately not implemented: the app-side `SessionCoordinator` actor graph
-  (main-actor UI mutation, storage actor, media queue, injected clocks,
-  permissions, capabilities and frame sources), the simulator fault-injection
-  journey through injected providers, and any measurement of the 200 ms
-  cancellation target.
-- Not claimed: real capture, real interruption delivery, background, thermal or
-  AVAssetWriter behaviour. Those belong to phases 05–07 and the G1 device gate.
+- Implemented in this step: `SessionCoordinator` (main-actor state mutation), the
+  storage actor, the media write queue, injected clock/permission/capability/capture/
+  export seams with synthetic implementations, token-and-phase-checked reply
+  handling, token-scoped abandonment, deterministic fault journeys in the app and UI
+  suites, and a measured cancellation budget.
+- Not implemented: ARKit/AVFoundation capture, world-map persistence and verified
+  relocalization, launch-time reconciliation, project switching, export rendering.
+- Not claimed: real interruption delivery, background/thermal behaviour, writer
+  behaviour on a physical device, spatial precision, or that a simulation is a
+  camera.
 
-## Changes
+## What the coordinator now executes
 
-`Sources/SecondShotCore/Session/SessionStateMachine.swift` was replaced by the
-production lifecycle (one machine, not a second parallel one):
+The reducer stays pure and decides *what* should happen. `SessionCoordinator` is the
+only place that mutates UI state, awaits adapters and feeds results back as events.
+Every effect in `SessionEffect` is executed rather than carried as a value:
 
-- `SessionPhase` now has the fifteen specified states: `idle`,
-  `requestingPermission`, `preparing`, `ready`, `recordingReference`,
-  `finalizingReference`, `referenceAvailable`, `relocalizing`, `guiding`,
-  `recordingRetake`, `finalizingRetake`, `reviewing`, `exporting`, `interrupted`,
-  `failed`. `referenceReady` was renamed to `referenceAvailable` to match the
-  specification vocabulary, and `InterruptionReason` gained `deviceLocked`.
-- `SessionState` carries the project, both take identities, the in-flight
-  `OperationToken`, the attempt `generation`, the exported take and a content-free
-  diagnostic code. Starting work mints `<kind>-<generation>`; abandoning work
-  advances the generation and drops the token.
-- `SessionIntent` (user) and `SessionEvent` (adapter) are separate vocabularies.
-  Only the reducer turns a fact into a state change.
-- `SessionEffect` is declarative and carries the identity it belongs to
-  (`startReferenceCapture(token:)`, `stopRetakeCapture(token:)`,
-  `beginExport(token:takeID:)`, …), so an adapter can never act on behalf of a
-  superseded operation.
-- New typed refusals: `staleOperation(expected:received:)`,
-  `foreignProject(expected:received:)`, `permissionNotGranted` alongside the
-  existing illegal-transition/event and missing-reference errors. A result whose
-  token does not match the in-flight operation is refused, and an event that
-  cannot be valid in the current phase is refused as an illegal event; both keep
-  the state unchanged instead of degrading into a success.
-- Interruption is allowed from every busy or preparation phase but never from
-  `idle`, `referenceAvailable`, `interrupted` or `failed`, and it always stops
-  exactly the work of that phase (`releaseCapturePreparation`, `stopReferenceCapture`,
-  `cancelRelocalization`, `stopGuidance`, `cancelExport`, `preserveIncompleteTake`,
-  `stopSensors`).
-- Export completion is accepted only for the open project; a foreign result is a
-  typed failure, so another project's export cannot advance this screen.
+| Effect | Executed as | Reply |
+| --- | --- | --- |
+| `requestCapturePermission` | camera permission status, then a prompt only when undetermined | `permissionsResolved` |
+| `prepareCapture` | capability probe, then `CaptureProviding.prepare()` | `capturePrepared` / `preparationFailed` |
+| `releaseCapturePreparation` | `releasePreparation()` (idempotent) | — |
+| `startReferenceCapture` / `startRetakeCapture` | `startCapture(request)` which writes the incomplete record, opens exactly one writer and writes synthetic placeholder media | — (failure → `captureFailed`) |
+| `stopReferenceCapture` / `stopRetakeCapture` | `finishCapture(token:)`: finalize the writer, commit the record, return the take | `referenceSaved` / `referenceFailed`, `retakeSaved` / `retakeFailed` |
+| `discardReferenceCapture` / `discardRetakeCapture` | `abandonCapture(token:)`: close the writer, delete the media, remove the record | — |
+| `preserveIncompleteTake` | `preserveCapture(token:)` plus an incomplete record write | — |
+| `beginRelocalization` / `cancelRelocalization` | adapter relocalization call | `relocalized` / `relocalizationFailed` |
+| `startGuidance` / `stopGuidance` | records the reference being guided | — |
+| `beginExport` / `cancelExport` | export seam (currently `UnavailableTakeExport`) | `exportFinished` / `exportFailed` |
+| `stopSensors` | `stopSensors()` | — |
 
-App and tests:
+Isolation: UI state lives on the main actor, records in a `ProjectStore` actor
+(one JSON manifest per attempt, written with an atomic replace), media work in a
+`MediaWriteQueue` actor that permits exactly one open writer and logs every open,
+finalize and discard in order. The clock, permissions, capabilities, capture and
+export are protocols with synthetic implementations used by the app and by the
+journeys; the real ARKit/AVFoundation implementations plug into the same seams.
 
-- `Sources/SecondShotApp/Features/Demo/DemoSessionStore.swift` now plays the
-  adapter role with synthetic replies: permission, preparation, reference capture,
-  relocalization, retake, review and the interruption path all go through the same
-  transitions real adapters will use. It never touches a camera, sensor or
-  permission API, and `isTrackingLost` is derived from the reducer instead of being
-  a separate flag that could disagree with the phase.
-- `Sources/SecondShotApp/Features/Demo/DemoGuidanceView.swift` renders three
-  distinct action sets: ready (start a retake), guiding (stop/review plus the
-  synthetic fault), and interrupted (recovery plus discard).
-- `Tests/SecondShotCoreTests/SessionStateMachineTests.swift` was rewritten around
-  the production vocabulary and now covers the happy path, idempotent repeats,
-  permission denial, preparation failure, writer failure, stale results in two
-  shapes, foreign-project export, export failure, per-phase interruption effects,
-  cancellation before and after finalization, and out-of-order callbacks.
-- `Tests/SecondShotAppTests/DemoSessionStoreTests.swift` and
-  `Tests/SecondShotUITests/DemoStudioUITests.swift` follow the corrected rule.
+### Reply policy
 
-Behaviour correction worth recording: the earlier demo *paused* a retake when
-tracking was lost and then resumed into the same take. Phase 03 forbids pausing and
-resuming inside one movie, so tracking loss now ends the attempt, keeps it
-incomplete, removes it from review, and offers deliberate recovery to the saved
-reference plus a fresh attempt. The simulator journey now asserts that an ended
-attempt is **not** offered as a reviewable take.
+Every reply passes two checks before it may change anything:
+
+1. **Phase and identity.** The coordinator only delivers a reply while the session
+   still waits for that operation — the expected phase *and*, where the reducer
+   minted one, the `<kind>-<generation>` token must still match.
+2. **Ownership.** The export reply carries the project the adapter claims it
+   exported; a reply for another project is refused by the reducer as a foreign
+   project.
+
+A refused reply is recorded in `droppedReplies` with a reason (`staleToken`,
+`foreignProject`, `noLongerExpected`) and never mutated state. A transition that
+cannot be explained by staleness or foreign ownership is recorded separately in
+`unexpectedFailures`; every journey asserts that list stays empty, so a genuine
+defect fails loudly instead of looking like a dropped reply.
+
+A take whose reply is no longer wanted is never published. What happens to its media
+and record depends on *why* the session moved on:
+
+- **Interruption** (tracking loss, backgrounding, lock, thermal, camera denial):
+  the attempt is preserved — writer closed, media kept, record written as
+  `incomplete` — because recovery has something to reconcile.
+- **Cancellation or a newer attempt**: the attempt is discarded by token, so it
+  leaves neither an open writer nor a record nor a file behind, even when its writer
+  had already finalized and committed before the cancellation arrived. Because the
+  abandonment names the attempt, a late reply for an old attempt can never delete a
+  newer attempt's work (asserted directly).
+
+Cancel, interrupt and duplicate stops are idempotent, and a second stop while the
+writer is finalizing issues no second writer command (asserted on the writer log).
+
+### Cancellation budget, measured
+
+Cancellation latency is measured with the injected monotonic clock from the intent
+being accepted to the writer being closed and its resources released. The synthetic
+adapters model device-representative costs per operation (abandon 30 ms, sensor stop
+5 ms, writer finalize 55 ms, preparation 40 ms, start 25 ms, relocalization 120 ms),
+so the measurement is the sum of the work the app actually awaited rather than a
+constant.
+
+| Path | Measured | Budget | Evidence |
+| --- | --- | --- | --- |
+| Cancel while recording a reference | **35.0 ms** | 200 ms | `testCancellationLatencyIsMeasuredWithTheInjectedClockAndInsideTheBudget` |
+| Cancel while the writer is finalizing | **35.0 ms** | 200 ms | `testCancellingWhileFinalizingIsAlsoMeasuredInsideTheBudget` |
+
+Honest limits: these are *modelled* adapter costs, not a measurement of iOS. The
+arithmetic, the instrumentation and the assertion are real and deterministic, and
+they would catch a coordinator that awaited more work than the budget allows. They
+do not prove that a real `AVAssetWriter` closes within 200 ms on a device, which
+needs phase 05–07 hardware evidence.
+
+## Fault-journey coverage
+
+All journeys run deterministically with no sleeps: `SessionHold` lets a journey park
+an adapter inside a named operation (`permission`, `prepare`, `startCapture`,
+`relocalize`, `finalize`, `export`), observe the session while that operation is in
+flight, and release it. Every journey also asserts the terminal invariants: no open
+writer, no adapter still parked, no unexplained transition, and — where applicable —
+that no record or media file survives.
+
+| Journey | Injected fault | Terminal invariant observed | Test (app suite) |
+| --- | --- | --- | --- |
+| Reference happy path | none | one record, `complete` only after the writer finalized; `incomplete` while recording; ordered writer log | `testReferenceJourneyExecutesEveryReducersEffectAndCommitsOneCompleteRecord` |
+| Retake happy path | none | two committed records, review reachable, guidance bound to the saved reference | `testRetakeJourneyReachesReviewWithTwoCommittedRecords` |
+| Duplicate stop while finalizing | held finalize | idempotent; writer finalized exactly once | `testARepeatedStopWhileFinalizingFinalizesTheWriterExactlyOnce` |
+| Permission denied (permanent) | `permissionDenied` | interrupted as `cameraDenied`, code `permission-camera-denied`, no record/media/reference | `testPermanentCameraDenialStaysInterruptedAndNeverClaimsAReference` |
+| Denied → granted via Settings return | `permissionDeniedThenGranted` + `applicationBecameActive()` | re-queried, `ready`, reference saved (`reference-take-3`) | `testDeniedCameraAccessIsRequeriedWhenTheAppReturnsToTheForeground` |
+| Permanent refusal later granted | `permissions.grant(.camera)` + foreground | `ready`, reference saved | `testAccessGrantedAfterAPermanentRefusalIsPickedUpOnReturn` |
+| Preparation failure then retry | `preparationFailure` (one-shot) | `failed` with `capture-prepare-unavailable`; retry reaches `ready` | `testPreparationFailureIsRecoverableAndReportsAContentFreeCode` |
+| Writer-creation failure | media queue `writerCreation` | `failed` with `writer-create-1`; no record, no media, no writer | `testWriterCreationFailureEndsTheAttemptWithoutPublishingARecord` |
+| Writer-finalize failure after capture | media queue `writerFinalize` | `failed` with `writer-finalize-2`; record `incomplete`, media kept, writer discarded | `testWriterFinalizeFailureLeavesOneIncompleteRecordAndNoOpenWriter` |
+| Cancel before finalization | — | `idle`; no record, media or writer; `noLongerExpected` drop | `testCancellingWhileRecordingLeavesNoWriterNoMediaAndNoRecord` |
+| Cancel after finalization | held finalize | `idle`; the committed record and file are both removed; `staleToken` drop | `testCancellingAfterTheWriterFinalizedLeavesNoRecordAndNoMedia` |
+| Late reply after a new attempt started | held finalize + cancel + new attempt | reply refused; the new attempt's record and media intact | `testALateReplyForAnEndedAttemptIsIgnoredWhileANewAttemptIsRecording` |
+| Tracking loss in requesting permission | held permission | not dispatched; path completes; no defect | `testTrackingLossWhileRequestingPermissionIsNotDispatched` |
+| Tracking loss in preparing | held prepare | not dispatched; path completes; no defect | `testTrackingLossWhilePreparingIsNotDispatched` |
+| Tracking loss in recording a reference | held startCapture | interrupted; attempt preserved `incomplete`; writer closed; never reviewable | `testTrackingLossWhileRecordingAReferencePreservesAnIncompleteAttempt` |
+| Tracking loss in finalizing a reference | held finalize | take kept unpublished; record demoted to `incomplete` | `testTrackingLossWhileFinalizingAReferenceKeepsTheTakeUnpublished` |
+| Tracking loss in recording a retake | held startCapture | ended; retake record `incomplete`; never reviewable; recovery explicit | `testTrackingLossWhileRecordingARetakeEndsTheAttemptAndIsNeverReviewable` |
+| Tracking loss in finalizing a retake | held finalize | kept unpublished; `staleToken` drop | `testTrackingLossWhileFinalizingARetakeKeepsItUnpublished` |
+| Tracking loss in relocalizing | held relocalize | ended; late `relocalized` dropped; saved reference survives | `testTrackingLossWhileRelocalizingEndsTheAttemptBeforeItStarts` |
+| Tracking loss in exporting | held export | not dispatched; export path completes | `testExportReportsUnavailableThroughTheRealPathAndReturnsToReview` |
+| `limited` tracking | `.limited` report | ends the attempt (`tracking-limited`); a later `normal` report never resumes it | `testLimitedTrackingEndsTheAttemptAndANormalReportNeverResumesIt` |
+| Relocalization failure | adapter failure | `interrupted` as `sceneNotRecognized`; recovery deliberate; second attempt succeeds | `testRelocalizationFailureEndsTheAttemptWithoutGuidance` |
+| Foreign-project export reply | exporter naming another project | refused as `foreignProject`; screen does not advance | `testAReplyForAnotherProjectIsRefusedInsteadOfAdvancingThisScreen` |
+| Every fault profile ends clean | all six profiles | no open writer, no parked adapter, no unexplained transition | `testEveryJourneyEndsWithNoOpenWriterAndNoHeldAdapter` |
+
+Simulator UI journeys inject the same faults through `-ss-fault <profile>` and assert
+what a person sees: `Tests/SecondShotUITests/SessionFaultJourneyUITests.swift` covers
+denied-then-granted permission (including a real background/foreground round trip),
+a recoverable preparation failure, and writer-creation/finalize failures that must
+never claim a reference. The existing demo journey continues to assert that an ended
+attempt is not offered as reviewable and that export explains its own absence.
+
+App-facing tests in `Tests/SecondShotAppTests/DemoSessionStoreTests.swift` check the
+surface a person interacts with: elapsed capture time comes from the injected clock,
+ending a journey leaves no scheduled update loop and no open writer, and every
+adapter fault reaches the screen as a user-facing reason plus a content-free code.
+Core tests in `Tests/SecondShotCoreTests/SessionStateMachineTests.swift` cover the
+transition table, including the writer-creation failure path added in this step and
+representative forbidden transitions.
 
 ## Observed verification
 
 | Command / experiment | Environment | Result | Evidence |
 | --- | --- | --- | --- |
-| `swift test` | Linux x86_64, Swift 6.0.3 | 79 tests, 0 failures | local run |
-| `python3 -B -m unittest discover -s scripts -p 'test_*.py'` | Python 3.12.3 | 39 tests, 0 failures | local run |
+| `swift test` | Linux x86_64, Swift 6.0.3 | 82 tests, 0 failures | local run |
+| `bash scripts/ci/verify_session_layer.sh` | same host | 26 session-layer journeys, 0 failures; measured cancellation 35.0 ms on both paths | local run, printed by the latency tests |
+| `python3 -B -m unittest discover -s scripts -p 'test_*.py'` | Python 3.12.3 | passed | local run |
 | `python3 -B scripts/ci/check_repository.py` | same host | passed | local run |
-| `swiftc -parse` over app and app/UI test sources | Swift 6.0.3 | syntax parse only, not a build | local run |
-| Repository checks on `1144e7b` | GitHub Actions, ubuntu runner | **success** | [run 40375022689](https://github.com/azerish25-ux/second-shot-camera-repo-app/actions/runs/40375022689) |
-| iOS Simulator workflow on `1144e7b` (compile + core/app/UI suites) | macos-26, workflow-selected Xcode 26.x | **success**: all steps green, including the evidence validator that requires the core, app and UI suites | [run 40375022861](https://github.com/azerish25-ux/second-shot-camera-repo-app/actions/runs/40375022861) |
+| Repository checks on the pushed head | GitHub Actions, ubuntu runner | recorded in [STATUS](../STATUS.md) | run linked there |
+| iOS Simulator workflow on the pushed head (compile + core/app/UI suites + evidence validation + Thread Sanitizer unit run) | macos-26, workflow-selected Xcode 26.x | recorded in [STATUS](../STATUS.md) | run linked there |
 
-Two infrastructure failures were found and fixed inside this step, and both are
-part of the record rather than rewritten away:
+`scripts/ci/verify_session_layer.sh` assembles a throwaway Swift package from the
+session-layer sources and the journey tests so those journeys can run on Linux before
+CI reaches macOS. It exists because it found real defects in seconds that would
+otherwise have surfaced only after a multi-minute simulator run; it does not compile
+the SwiftUI app and is not a substitute for the simulator workflow.
 
-1. `03464ba` failed the iOS Simulator workflow at step 3 in 18 seconds: the runner
-   no longer matched the hardcoded exact-Xcode assertion. The immediately preceding
-   run on `3912918` had passed that same step, so the `macos-26` image rolled under
-   the workflow between 17:14 and 17:53 with no repository change. The pin was
-   replaced by a deliberate selection: prefer `Xcode_26.6.app`, otherwise the newest
-   installed `Xcode_26*.app`, export the choice to later steps, and fail with the
-   full `/Applications` inventory if no 26.x exists. The inventory, the selected
-   path and the failure diagnostics are now written to the job summary, so a future
-   drift is diagnosable from the public run page instead of requiring a log download.
-2. The evidence validator (`collect_results.py`) had to be checked against the new
-   bundle: it now requires `SecondShotCoreTests` alongside the app and UI suites, so
-   a green run means all three suites really executed.
+Defects found and fixed while building this slice (none by weakening an assertion):
 
-The exact Xcode build selected on `1144e7b` is recorded in that run's job summary.
-This environment has no browser and no authenticated `gh`, so the summary text could
-not be read back; the conclusion itself was verified from the run's completion state
-and per-step conclusions via the public API.
+1. `OperationToken` was not `Hashable`, so an adapter could not index in-flight
+   attempts by identity. It is now `Hashable` in the core, which is what lets a late
+   cancellation still discard exactly its own attempt.
+2. The media-queue fault was defined but never injected, so the writer-failure
+   journeys silently exercised a healthy writer. The composition root now passes the
+   profile's fault into the queue at construction.
+3. `SessionHold` announced arrival before registering the release continuation, so a
+   journey that released immediately after seeing the arrival could leave an adapter
+   parked forever. Registration and announcement are now one synchronous step.
+4. A local `record` variable shadowed the coordinator's own error-recording method.
+5. A no-op `preserveIncompleteTake` for attempts whose writer was never created
+   would have written an incomplete record for a take that never captured anything.
+   Preservation is now gated on the capture path actually having begun.
+6. One journey closed a hold point it never reached, which hung rather than failing
+   and is exactly why the hold primitive is explicit.
+7. Found by the simulator workflow, not locally: `DemoSessionStore` called the
+   main-actor-isolated `SessionEnvironment.synthetic` from a *default argument*,
+   which Swift evaluates outside the actor, so the app target did not compile while
+   the whole session-layer harness stayed green. The composition is now built inside
+   the initializer. Recorded because it marks the real boundary of the harness's
+   coverage: an app-target isolation defect is only visible to the macOS build.
 
-Failures found and fixed while building this slice (all in the new test code, none
-by weakening the implementation):
+## Residual gaps
 
-1. Operation identities are minted as `<kind>-<generation>`; the first tests
-   expected a bare kind and failed. The helper now asserts the documented shape.
-2. A late writer result arriving while the phase no longer accepts that event is an
-   *illegal event*; a late result arriving while a newer attempt is in flight is a
-   *stale operation*. The test now asserts both refusals separately instead of
-   expecting only one.
-3. Two test state literals used argument order that does not match the initializer,
-   and one test applied `.state` twice.
+Named precisely, so PARTIAL is not a vague hedge:
 
-## What this does not prove
+1. **Project switching during a slow operation** is unexercised. The app has one
+   demo project and no project switcher; what *is* evidenced is the operation
+   identity and the foreign-project refusal that make switching safe.
+2. **Launch reconciliation of persisted incomplete records** is not implemented.
+   Phase 03 guarantees that a record cannot look complete before its writer
+   finalized, and that an interrupted attempt is preserved as `incomplete`; the
+   recovery pass that reconciles those records at launch belongs with the phase-04
+   project package.
+3. **Verified relocalization and tracking epochs** are not implemented. The reducer
+   and the second attempt carry a new generation, `limited`/`unavailable` tracking
+   ends an attempt, and `PoseTrack` refuses mixed origins and epochs from phase 02;
+   the AR world-map epoch itself arrives with phases 05–07.
+4. **The cancellation budget is modelled, not measured on a device** (see above).
+5. **No concurrency finding is device evidence.** Thread Sanitizer runs the unit
+   suites in CI; it says nothing about ARKit, AVFoundation or real interruption
+   delivery.
+6. **Everything is simulator-only.** G1 (capture integrity) and G2 (useful retakes)
+   remain BLOCKED_DEVICE.
 
-- No real adapter exists yet: nothing here has opened a camera, an AR session, a
-  writer or a file. The effects are values the app does not execute.
-- No injected-provider simulation: permission denial, tracking loss and writer
-  failure are exercised as *events* in tests and replayed synchronously by the demo
-  store, not delivered by real OS or hardware services.
-- The 200 ms cancellation-response target is unmeasured. Nothing about cancellation
-  latency, buffer release, thermal behaviour, battery cost or background rules has
-  been observed.
-- No concurrency diagnostics: the reducer is pure and single-threaded; actor
-  isolation, unsafe buffer transfer and race detection belong to the missing
-  coordinator work.
-- Interruptions arriving *during* finalization preserve the take as incomplete but
-  cannot yet be shown to keep the original file intact; that needs phase 04 storage
-  and phase 07 device evidence.
-- The passing simulator run proves the app compiles and the updated journeys pass on
-  a simulator. It cannot prove device interruption delivery, background or thermal
-  behaviour, and it says nothing about real capture.
-- Project switching during a slow operation is covered only through the operation
-  generation and the export project guard. There is no multi-project coordinator
-  yet, so a full "switch while exporting" journey has not been exercised.
+### Cross-actor transfer review
+
+The spec asks for an explicit review of unsafe cross-actor transfer. What crosses an
+actor boundary here is only value types conforming to `Sendable`: `SessionState`,
+`SessionIntent`, `SessionEvent`, `SessionEffect`, `OperationToken`, `TakeID`,
+`ProjectID`, `OperationID`, `CaptureRequest`, `CaptureCapabilities`, `SessionRecord`,
+`MediaWriteEntry`, `ExportOutcome` and the `TrackingAvailability`/`TrackingReason`
+enums. No buffer, pixel buffer, image, audio or AVAsset object crosses a boundary in
+this phase because none exists yet. Shared mutable state is limited to three
+`@unchecked Sendable` synthetic providers, each guarding its state with an `NSLock`,
+and the app's own `SyntheticSessionClock`, which does the same. The coordinator never
+sends a closure into an adapter, and no adapter calls back into the coordinator: a
+result is returned from an awaited call and the coordinator decides what it means.
 
 ## Gate decision
 
-- Acceptance for the model: every allowed transition has a test; representative
-  forbidden transitions throw; double taps, out-of-order callbacks, cancellation
-  before and after writer finalization, and interruption during each busy phase are
-  covered; no unbounded tasks or hidden recordings exist, because no effect is
-  executed yet.
-- Outcome: **continue**, phase 03 remains **PARTIAL** until the coordinator,
-  injected providers and the simulator fault journey exist.
-- No threshold changed. The 200 ms responsiveness target is retained as a target to
-  measure, not a claimed result.
+- Acceptance for the adapter and journeys: every effect is executed; operation
+  identity is honoured end to end; stale and foreign replies are dropped and
+  asserted to be dropped; cancellation before and after finalization leaves no
+  orphan; interruption in every busy phase ends the attempt and never resumes it;
+  the cancellation budget is measured and inside 200 ms; no unbounded task, hidden
+  recording or detached work remains (asserted by the ticker and writer invariants).
+- Outcome: **continue**. Phase 03 stays **PARTIAL** with gaps 1–6 above.
+- No threshold was relaxed. The 200 ms target is measured, not assumed.
 
 ## Handoff and publication
 
-- First executable next task: implement `Sources/SecondShotApp/Session/SessionCoordinator.swift`
-  as a `@MainActor` adapter that consumes the reducer's effects, isolates storage to
-  an actor, injects clock/permission/capability/frame providers, and drops results
-  whose token no longer matches. Then add the simulator journey for denied
-  permission, tracking loss and writer failure through those injected providers.
-- After that: [phase 04](../phases/04-project-storage.md) (package, atomic
-  publication and recovery).
-- Blocker: none from authority or hardware for the remaining phase-03 work.
+- Next executable task: [phase 04](../phases/04-project-storage.md) — the local
+  project package, atomic publication and launch recovery that closes gaps 1 and 2.
+- Then: phase 05 capability probing and probes on a physical device.
+- Commits for this step: `ef213e3` (coordinator, providers, journeys, harness) and
+  the documentation commit that carries this report. Both are on `main`; the head
+  SHA and its green runs are recorded in [STATUS](../STATUS.md).
+- Blocker: none from authority or hardware for phase 04. Physical-device evidence
+  remains blocked until the capture path exists.

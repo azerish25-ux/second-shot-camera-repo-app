@@ -92,6 +92,23 @@ python3 -B scripts/ci/check_repository.py
 python3 -B -m unittest discover -s scripts -p 'test_*.py' -v
 ```
 
+Any machine with a Swift 5.9+ toolchain, including Linux, can run the session-layer
+fault journeys before CI reaches macOS:
+
+```bash
+bash scripts/ci/verify_session_layer.sh
+```
+
+It assembles a throwaway Swift package from `Sources/SecondShotCore`, the session
+layer in `Sources/SecondShotApp/Session` and
+`Tests/SecondShotAppTests/SessionCoordinatorJourneyTests.swift`, then runs them. The
+session layer uses Foundation only, so an actor, storage-queue or coordinator defect
+fails in seconds here instead of after a simulator build. It does **not** compile the
+SwiftUI app, the views or the UI journeys: an app-target compile error such as a
+main-actor call from a default argument is still found only by the simulator
+workflow. Set `SECOND_SHOT_SESSION_LAYER_DIR` to isolate a run; the default directory
+is reused so SwiftPM's build cache stays warm.
+
 The structural checker checks all 24 phase files, required entry documents,
 repository-relative Markdown link targets, JSON/plists and immutable action pins.
 It does not validate remote links, Markdown anchors, every YAML rule or Swift code.
@@ -108,8 +125,16 @@ bash scripts/ci/install_xcodegen.sh
 .tools/xcodegen/bin/xcodegen generate --spec project.yml
 swift test --enable-code-coverage
 bash scripts/ci/run_simulator_tests.sh
+bash scripts/ci/run_concurrency_diagnostics.sh
 python3 -B scripts/ci/collect_results.py
 ```
+
+`run_concurrency_diagnostics.sh` reruns the core and app unit suites under Thread
+Sanitizer, because the session layer introduced real concurrent work (a main-actor
+coordinator, a storage actor and a serialized media queue). The UI journeys are
+excluded: they are slow under instrumentation and are not where the actor graph is
+tested. A clean report is evidence about this code; it says nothing about ARKit,
+AVFoundation or physical interruption delivery.
 
 Use a fresh ignored result directory for a second local run: Xcode refuses to
 overwrite an existing xcresult bundle. Move the existing `artifacts/ios` directory
@@ -144,6 +169,27 @@ Do not rerun repeatedly to bury a deterministic error. Distinguish infrastructur
 failure (missing runtime, runner outage) from source/test failure, preserve the
 first run, and explain any targeted retry. Do not use `continue-on-error`, delete
 failing tests, or replace physical validation with synthetic runs.
+
+## Fault profiles for the synthetic session
+
+The simulator has no hardware to fail with, so the app reads one launch argument to
+inject a deterministic adapter fault. It changes which synthetic provider reports
+what, never a transition:
+
+| `-ss-fault` value | Injected fault |
+| --- | --- |
+| `none` (default) | nothing fails |
+| `permissionDenied` | camera access is refused, permanently |
+| `permissionDeniedThenGranted` | refused once, granted afterwards — how returning from Settings looks |
+| `preparationFailure` | capture preparation fails once, so the retry path is exercisable |
+| `writerCreationFailure` | the media queue refuses to open a writer |
+| `writerFinalizeFailure` | the media queue refuses to finalize an opened writer |
+| `trackingLoss` | tracking is unusable from the moment capture starts |
+
+The UI journeys in `Tests/SecondShotUITests/SessionFaultJourneyUITests.swift` use
+these profiles and assert what a person sees; the app-suite journeys in
+`Tests/SecondShotAppTests/SessionCoordinatorJourneyTests.swift` assert the session
+invariants behind them. Neither is device evidence.
 
 ## Extension points
 

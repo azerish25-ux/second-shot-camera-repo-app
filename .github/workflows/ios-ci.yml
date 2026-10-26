@@ -111,6 +111,12 @@ jobs:
       - name: Build and run simulator unit and UI tests
         run: bash scripts/ci/run_simulator_tests.sh
 
+      # The session layer introduced real concurrent work, so the phase asks for the
+      # race diagnostics the toolchain supports. Unit suites only: the UI journeys
+      # are slow under instrumentation and are not where the actor graph is tested.
+      - name: Concurrency diagnostics under Thread Sanitizer
+        run: bash scripts/ci/run_concurrency_diagnostics.sh
+
       - name: Surface failure details as annotations
         if: always()
         run: |

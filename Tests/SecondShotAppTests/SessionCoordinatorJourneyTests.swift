@@ -656,6 +656,58 @@ final class SessionCoordinatorJourneyTests: XCTestCase {
         await assertClean(environment)
     }
 
+    func testTrackingLossWhileFinalizingARetakeKeepsItUnpublished() async throws {
+        let environment = try await savedReference()
+        let coordinator = environment.coordinator
+        await coordinator.send(.prepareRetake)
+        await coordinator.send(.startRetake)
+
+        await hold.close(.finalize)
+        let stop = Task { await coordinator.send(.stopRetake) }
+        await hold.awaitArrival(of: .finalize)
+        XCTAssertEqual(coordinator.state.phase, .finalizingRetake)
+
+        await coordinator.reportTracking(.unavailable)
+        XCTAssertEqual(coordinator.state.phase, .interrupted)
+
+        await hold.release(.finalize)
+        await stop.value
+
+        XCTAssertNil(coordinator.state.retakeTakeID)
+        XCTAssertNotEqual(coordinator.state.phase, .reviewing)
+        let committed = try await records(environment)
+        XCTAssertEqual(committed.map(\.completion), [.complete, .incomplete])
+        XCTAssertNil(committed.last?.takeID)
+        XCTAssertEqual(coordinator.droppedReplies.map(\.reason), [.staleToken])
+        await assertClean(environment)
+    }
+
+    /// Only `normal` tracking may drive precision guidance, so `limited` ends the
+    /// attempt exactly as an outright loss does — and a healthier report afterwards
+    /// never resumes it.
+    func testLimitedTrackingEndsTheAttemptAndANormalReportNeverResumesIt() async throws {
+        let environment = try await savedReference()
+        let coordinator = environment.coordinator
+        await coordinator.send(.prepareRetake)
+        await coordinator.send(.startRetake)
+
+        await coordinator.reportTracking(.limited)
+
+        XCTAssertEqual(coordinator.state.phase, .interrupted)
+        XCTAssertEqual(coordinator.state.interruption, .trackingLost)
+        XCTAssertEqual(coordinator.state.diagnosticCode, "tracking-limited")
+        XCTAssertNil(coordinator.state.retakeTakeID)
+        XCTAssertNotEqual(coordinator.state.phase, .reviewing)
+
+        await coordinator.reportTracking(.normal)
+        XCTAssertEqual(coordinator.state.phase, .interrupted, "recovery is deliberate, never automatic")
+        XCTAssertNil(coordinator.state.retakeTakeID)
+
+        await coordinator.send(.resume)
+        XCTAssertEqual(coordinator.state.phase, .referenceAvailable)
+        await assertClean(environment)
+    }
+
     // MARK: - Export
 
     func testExportReportsUnavailableThroughTheRealPathAndReturnsToReview() async throws {

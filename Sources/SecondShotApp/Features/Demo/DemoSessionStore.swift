@@ -49,15 +49,19 @@ final class DemoSessionStore: ObservableObject {
     private var ticker: Task<Void, Never>?
     private let tickInterval: TimeInterval
 
-    init(
-        environment: SessionEnvironment = .synthetic(
+    /// - Parameters:
+    ///   - environment: the injected providers. `nil` builds the app's composition
+    ///     here, inside the main actor, rather than in a default argument: default
+    ///     arguments are evaluated outside the actor and the composition root is
+    ///     main-actor bound.
+    ///   - tickInterval: how often the UI update loop runs while a retake records.
+    init(environment: SessionEnvironment? = nil, tickInterval: TimeInterval = 0.1) {
+        let resolved = environment ?? SessionEnvironment.synthetic(
             profile: SessionFaultProfile.from(ProcessInfo.processInfo.arguments)
-        ),
-        tickInterval: TimeInterval = 0.1
-    ) {
-        self.environment = environment
+        )
+        self.environment = resolved
         self.tickInterval = tickInterval
-        environment.coordinator.sessionDidChange = { [weak self] _ in
+        resolved.coordinator.sessionDidChange = { [weak self] _ in
             self?.sessionStateChanged()
         }
     }
@@ -111,6 +115,10 @@ final class DemoSessionStore: ObservableObject {
 
     /// The diagnostic codes the session ended with, exposed for the report.
     var droppedReplyCount: Int { environment.coordinator.droppedReplies.count }
+
+    /// Whether UI updates are still scheduled. Ending a journey must leave no
+    /// detached work running, and this is what the tests assert instead of guessing.
+    var hasScheduledTicker: Bool { ticker != nil }
 
     // MARK: Journey
 
@@ -312,14 +320,18 @@ final class DemoSessionStore: ObservableObject {
             case .trackingLost:
                 // The guidance screen carries the fuller explanation.
                 return nil
-            case .cameraDenied, .appBackgrounded, .deviceLocked, .storageLow,
-                 .thermalPressure, .writerFailure, .sceneNotRecognized:
+            case .cameraDenied:
+                return "\(interruption.explanation) Allow camera access for Second Shot in Settings, then try again."
+            case .appBackgrounded, .deviceLocked, .storageLow, .thermalPressure,
+                 .writerFailure, .sceneNotRecognized:
                 return interruption.explanation
             }
         }
         if state.phase == .failed {
+            // A user-safe action plus a content-free code: never media, room or
+            // personal data, and never the raw error.
             let code = state.diagnosticCode ?? "adapter-failure"
-            return "The take was not saved (\(code)). Nothing was published and the saved reference is unchanged."
+            return "The take was not saved (\(code)). Nothing was published and the saved reference is unchanged. Try again to re-prepare the capture."
         }
         return environment.coordinator.lastError
     }

@@ -52,6 +52,7 @@ final class DemoSessionStoreTests: XCTestCase {
     func testRetakeJourneyUsesTheCoordinatorAndStopsIntoReview() async throws {
         let store = await storeAtSavedReference()
         await store.startRetake()
+        XCTAssertEqual(store.state.token, OperationToken(operationID: OperationID("retake-3"), generation: 3))
 
         XCTAssertEqual(store.state.phase, .recordingRetake)
         XCTAssertTrue(store.isRecordingRetake)
@@ -128,6 +129,25 @@ final class DemoSessionStoreTests: XCTestCase {
         XCTAssertEqual(store.route, [.reference])
         XCTAssertFalse(store.isTrackingLost)
         await store.finishDemo()
+    }
+
+    /// A journey must not leave a timer, a writer or a record behind.
+    func testEndingAJourneyLeavesNoScheduledWorkOrOpenWriter() async throws {
+        let store = await storeAtSavedReference()
+        await store.startRetake()
+        XCTAssertTrue(store.hasScheduledTicker, "a running retake schedules exactly one UI update loop")
+
+        await store.stopAndReview()
+        XCTAssertFalse(store.hasScheduledTicker, "stopping must end the update loop")
+        let writersAfterStop = await store.environment.media.openWriterCount()
+        XCTAssertEqual(writersAfterStop, 0)
+
+        await store.finishDemo()
+        XCTAssertFalse(store.hasScheduledTicker)
+        let writersAfterFinish = await store.environment.media.openWriterCount()
+        XCTAssertEqual(writersAfterFinish, 0)
+        XCTAssertEqual(store.droppedReplyCount, 0, "the happy path must drop no replies")
+        XCTAssertEqual(store.state.phase, .idle)
     }
 
     func testStartingARetakeWithoutAReferenceDoesNothing() async throws {
