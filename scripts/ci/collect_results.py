@@ -219,7 +219,9 @@ def main(argv: list[str] | None = None) -> int:
         node_names = set()
     (artifacts / "test-tree.json").write_text(json.dumps(tree, indent=2) + "\n", encoding="utf-8")
 
-    attachment_count, attachment_diagnostic = export_attachments(bundle, artifacts / "attachments")
+    attachment_count, attachment_diagnostic = export_attachments(
+        bundle, artifacts / "screenshots-and-attachments"
+    )
     if attachment_diagnostic:
         (artifacts / "attachment-export.log").write_text(attachment_diagnostic + "\n", encoding="utf-8")
 

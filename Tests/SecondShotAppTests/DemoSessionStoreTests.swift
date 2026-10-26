@@ -6,6 +6,7 @@ import XCTest
 final class DemoSessionStoreTests: XCTestCase {
     func testSimulatingReferenceReachesADurableReadyState() {
         let store = DemoSessionStore()
+        store.openDemo()
         store.simulateReference()
 
         XCTAssertEqual(store.state.phase, .referenceReady)
@@ -17,6 +18,7 @@ final class DemoSessionStoreTests: XCTestCase {
 
     func testRetakeJourneyUsesTheReducerAndStopsIntoReview() {
         let store = DemoSessionStore()
+        store.openDemo()
         store.simulateReference()
         store.startRetake()
 
@@ -37,6 +39,7 @@ final class DemoSessionStoreTests: XCTestCase {
 
     func testTrackingLossRemovesGuidanceButKeepsTheTake() {
         let store = DemoSessionStore()
+        store.openDemo()
         store.simulateReference()
         store.startRetake()
 
