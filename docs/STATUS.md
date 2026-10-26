@@ -5,19 +5,22 @@ from the planned product. Read the linked run/report evidence before making a cl
 
 ## Current checkpoint
 
-Phases 00–02 are on `main`. Code commits: `dd65b67`, `1f2fa23`, `201acb5` (phase 00
-foundation), `3912918` (phase 01 protocol, phase 02 fixtures, simulator core-test
-bundle). The passing runs test the exact head `3912918`.
+Phases 00–02 are complete or frozen and on `main`; phase 03 is in progress.
+Code commits: `dd65b67`, `1f2fa23`, `201acb5` (phase 00 foundation), `3912918`
+(phase 01 protocol, phase 02 fixtures, simulator core-test bundle), `068b4be`
+(phase 00–02 evidence), plus the phase-03 lifecycle commit recorded below.
 
-- [Phase 00 report](reports/phase-00-foundation-report.md) — the passing simulator
-  run is [40366004501](https://github.com/azerish25-ux/second-shot-camera-repo-app/actions/runs/40366004501) on `3912918`.
+- [Phase 00 report](reports/phase-00-foundation-report.md).
 - [Phase 01 report](reports/phase-01-validation-protocol-report.md) — protocol
   frozen, study not run.
 - [Phase 02 report](reports/phase-02-pose-math-report.md) — arithmetic complete.
-- Repository checks: [run 40366004536](https://github.com/azerish25-ux/second-shot-camera-repo-app/actions/runs/40366004536) — success in 5 s.
-- iOS Simulator CI: [run 40366004501](https://github.com/azerish25-ux/second-shot-camera-repo-app/actions/runs/40366004501) — **success** in 11 m 20 s: unsigned simulator
-  build, `swift test` on the runner, and the core, app and UI test bundles on an
-  iPhone 17 simulator with no skips, screenshots collected and evidence validated.
+- [Phase 03 report](reports/phase-03-lifecycle-report.md) — session model and
+  interruption rules done; coordinator adapter outstanding.
+- Repository checks on `068b4be`: [run 40368183164](https://github.com/azerish25-ux/second-shot-camera-repo-app/actions/runs/40368183164) — success.
+- iOS Simulator CI on `068b4be`: [run 40368182795](https://github.com/azerish25-ux/second-shot-camera-repo-app/actions/runs/40368182795) — **success** in 4 m 49 s: all eleven steps green,
+  including the evidence validator that now requires the core, app and UI suites.
+  The equivalent runs on `3912918` also passed (simulator 11 m 20 s, repository
+  checks 5 s).
 
 ### Local verification on this development host
 
@@ -27,7 +30,7 @@ SwiftUI application.
 
 | Command | Result |
 | --- | --- |
-| `swift test` | 72 core tests, 0 failures |
+| `swift test` | 79 core tests, 0 failures |
 | `python3 -B -m unittest discover -s scripts -p 'test_*.py'` | 39 tests, 0 failures |
 | `python3 -B scripts/ci/check_repository.py` | passed, including the phase-01 protocol invariants |
 
@@ -69,7 +72,8 @@ demo's reducer only. The demo requests no camera, microphone or analytics access
 | 00 — Foundation | PARTIAL | Implementation, repository checks and simulator CI pass; the screenshot **content** review of G0 is still outstanding because the artifact needs authenticated download |
 | 01 — Product validation | PARTIAL | Protocol, interview guide and consent material frozen and machine-checked on `3912918`; no participant, no data, and the independent human-review check has not been run. Owner approval is required before any outreach |
 | 02 — Pose math | COMPLETE | Arithmetic and fixture criteria met with observed evidence on `3912918`; no device evidence is required by this phase |
-| 03–23 — Product implementation | PLANNED | Specifications only; phase 03 is the next executable task |
+| 03 — Lifecycle/state machine | PARTIAL | Production phases, operation identity, staleness/foreign-project rejection, per-phase interruption and cancellation are implemented and unit-tested; the app-side coordinator with injected providers and the simulator fault journey are missing |
+| 04–23 — Product implementation | PLANNED | Specifications only; phase 04 storage is the next executable task after the phase-03 adapter |
 | G0 — Reproducible foundation | OPEN | Automated simulator evidence passed; visual screenshot review remains |
 | G1 — Capture integrity | BLOCKED_DEVICE | No capture implementation and no physical-device experiment |
 | G2 — Useful retakes | BLOCKED_DEVICE | Depends on G1 and on the phase-01 pilot actually running |
@@ -77,9 +81,11 @@ demo's reducer only. The demo requests no camera, microphone or analytics access
 
 ## Next task
 
-Inspect the `ios-evidence-<SHA>` artifact for `3912918`, review its screenshots
-against the [screen specifications](design/SCREEN_SPECIFICATIONS.md) and close G0,
-then execute [phase 03](phases/03-lifecycle-state-machine.md): production states,
-declarative effects, operation IDs/generations with stale-result rejection, and the
-injected monotonic clock. Phases 03–05 are pure-domain or simulator work and do not
-depend on the phase-01 pilot or on physical hardware.
+Finish [phase 03](phases/03-lifecycle-state-machine.md) by adding the
+`SessionCoordinator` platform adapter — main-actor UI mutation, storage actor,
+media queue, injected clock/permission/capability/frame providers, and token-safe
+result handling — together with the simulator journeys for denied permission,
+tracking loss and writer failure. Then start [phase 04](phases/04-project-storage.md)
+(local project packages, atomic publication and launch recovery). Independently,
+the `ios-evidence-<SHA>` artifact for the phase-00 screenshots still needs an
+authenticated download and a visual review before G0 can close.

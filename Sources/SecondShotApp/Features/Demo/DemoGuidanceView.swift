@@ -43,12 +43,16 @@ struct DemoGuidanceView: View {
 
     private var instruction: String {
         if store.isTrackingLost { return "Guidance unavailable" }
+        if store.canStartRetake { return "Reference ready" }
         return store.guidanceReading?.instruction ?? "Preparing guidance"
     }
 
     private var detail: String {
         if store.isTrackingLost {
-            return "Pose data is not usable, so precise cues are hidden. The synthetic take is paused; Stop stays available."
+            return "Tracking was lost, so this attempt ended and was kept as incomplete. Nothing auto-resumes: review the option below or start a fresh attempt."
+        }
+        if store.canStartRetake {
+            return "The reference arc is saved. Start a retake when you are standing where the original shot began."
         }
         guard let reading = store.guidanceReading else {
             return "Waiting for a valid pose."
@@ -61,7 +65,7 @@ struct DemoGuidanceView: View {
 
     private var instructionBlock: some View {
         VStack(alignment: .leading, spacing: SSSpace.xs) {
-            SSEyebrow(text: store.isTrackingLost ? "Tracking lost" : "Next correction")
+            SSEyebrow(text: eyebrow)
 
             Text(instruction)
                 .font(.system(.title, design: .default).weight(.semibold))
@@ -181,30 +185,27 @@ struct DemoGuidanceView: View {
         .accessibilityIdentifier("retake.metrics.details")
     }
 
+    private var eyebrow: String {
+        if store.isTrackingLost { return "Tracking lost" }
+        return store.canStartRetake ? "Saved reference" : "Next correction"
+    }
+
     private var actions: some View {
         VStack(alignment: .leading, spacing: SSSpace.s) {
             if let error = store.lastError {
-                InlineNotice(title: "Guidance stopped", message: error, tone: .caution)
+                InlineNotice(title: "Session stopped", message: error, tone: .caution)
             }
 
-            Button {
-                store.stopAndReview()
-            } label: {
-                Label("Stop and review", systemImage: "stop.fill")
-            }
-            .buttonStyle(SSPrimaryButtonStyle())
-            .accessibilityIdentifier("demo.review.open")
-            .accessibilityHint("Ends the synthetic retake and opens review.")
-
-            if store.isTrackingLost {
+            if store.isRecordingRetake {
                 Button {
-                    store.resumeTracking()
+                    store.stopAndReview()
                 } label: {
-                    Label("Resume demo", systemImage: "arrow.clockwise")
+                    Label("Stop and review", systemImage: "stop.fill")
                 }
-                .buttonStyle(SSSecondaryButtonStyle())
-                .accessibilityIdentifier("demo.tracking.resume")
-            } else {
+                .buttonStyle(SSPrimaryButtonStyle())
+                .accessibilityIdentifier("demo.review.open")
+                .accessibilityHint("Ends the synthetic retake and opens review.")
+
                 Button {
                     store.interruptTracking()
                 } label: {
@@ -213,6 +214,31 @@ struct DemoGuidanceView: View {
                 .buttonStyle(SSSecondaryButtonStyle())
                 .accessibilityIdentifier("demo.tracking.interrupt")
                 .accessibilityHint("Shows the unavailable state used when tracking fails.")
+            } else if store.isTrackingLost {
+                Button {
+                    store.resumeTracking()
+                } label: {
+                    Label("Return to the saved reference", systemImage: "arrow.clockwise")
+                }
+                .buttonStyle(SSPrimaryButtonStyle())
+                .accessibilityIdentifier("demo.tracking.resume")
+
+                Button {
+                    store.discardAttempt()
+                } label: {
+                    Text("Discard this attempt")
+                }
+                .buttonStyle(SSSecondaryButtonStyle())
+                .accessibilityIdentifier("demo.attempt.discard")
+            } else {
+                Button {
+                    store.startRetake()
+                } label: {
+                    Label("Start retake", systemImage: "record.circle")
+                }
+                .buttonStyle(SSPrimaryButtonStyle())
+                .accessibilityIdentifier("demo.retake.restart")
+                .accessibilityHint("Begins a new guided retake of the saved reference.")
             }
         }
     }

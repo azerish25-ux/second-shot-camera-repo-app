@@ -61,13 +61,13 @@ struct DemoReferenceView: View {
                         .tracking(1.2)
                         .foregroundStyle(SSColor.textSecondary)
                     Spacer()
-                    Text(store.referenceReady ? "SAVED" : "PLANNED")
+                    Text(store.hasReference ? "SAVED" : "PLANNED")
                         .font(SSFont.eyebrow)
                         .tracking(1.2)
-                        .foregroundStyle(store.referenceReady ? SSColor.guide : SSColor.textSecondary)
+                        .foregroundStyle(store.hasReference ? SSColor.guide : SSColor.textSecondary)
                 }
 
-                ArcSchematic(progress: store.referenceReady ? 1 : 0.06)
+                ArcSchematic(progress: store.hasReference ? 1 : 0.06)
                     .frame(height: 220)
                     .background(SSColor.canvas.opacity(0.5))
                     .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
@@ -106,7 +106,7 @@ struct DemoReferenceView: View {
             )
         }
 
-        if store.referenceReady {
+        if store.hasReference {
             VStack(alignment: .leading, spacing: SSSpace.s) {
                 InlineNotice(
                     title: "Reference saved (synthetic)",

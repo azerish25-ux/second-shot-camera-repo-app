@@ -64,15 +64,35 @@ final class DemoStudioUITests: XCTestCase {
             "Lost tracking must remove precision guidance"
         )
         XCTAssertTrue(
+            app.buttons["demo.tracking.resume"].waitForExistence(timeout: 10),
+            "Recovery must be offered rather than resuming on its own"
+        )
+        XCTAssertFalse(
             app.buttons["demo.review.open"].exists,
-            "Stop must remain reachable when guidance is unavailable"
+            "An ended, incomplete attempt must not be offered as a reviewable take"
         )
         attachScreenshot("05-tracking-unavailable")
 
         let resume = app.buttons["demo.tracking.resume"]
-        XCTAssertTrue(resume.waitForExistence(timeout: 10))
         resume.tap()
-        XCTAssertFalse(app.staticTexts["Guidance unavailable"].exists, "Resume should restore guidance")
+        XCTAssertFalse(app.staticTexts["Guidance unavailable"].exists, "Recovery should clear the unavailable state")
+
+        // Recovery returns to the saved reference, so a noticeplate says so and a
+        // brand-new attempt has to be started deliberately.
+        let restart = app.buttons["demo.retake.restart"]
+        XCTAssertTrue(restart.waitForExistence(timeout: 10), "A fresh attempt must be started deliberately")
+        XCTAssertEqual(
+            app.staticTexts["retake.guidance"].label,
+            "Reference ready",
+            "Recovery lands on the saved reference, not in a half-finished recording"
+        )
+        restart.tap()
+
+        XCTAssertTrue(
+            app.buttons["demo.review.open"].waitForExistence(timeout: 10),
+            "Stop must be reachable during a new attempt"
+        )
+        XCTAssertFalse(app.staticTexts["Guidance unavailable"].exists, "The new attempt guides again")
 
         let review = app.buttons["demo.review.open"]
         XCTAssertTrue(review.waitForExistence(timeout: 10))
