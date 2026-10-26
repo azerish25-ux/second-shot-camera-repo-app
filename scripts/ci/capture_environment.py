@@ -46,8 +46,11 @@ def main() -> int:
         "hostname": platform.node(),
         "architecture": platform.machine(),
         "python": platform.python_version(),
+        # DEVELOPER_DIR is the toolchain actually selected for this run; the
+        # preferred path is only the first candidate the workflow tries.
         "developerDir": os.environ.get("DEVELOPER_DIR"),
-        "expectedXcode": os.environ.get("SECOND_SHOT_EXPECTED_XCODE"),
+        "preferredXcode": os.environ.get("SECOND_SHOT_PREFERRED_XCODE"),
+        "xcodeSeries": os.environ.get("SECOND_SHOT_XCODE_SERIES"),
         "xcodebuild": run(["xcodebuild", "-version"]),
         "swift": run(["swift", "--version"]),
         "iphonesimulatorSDK": run(["xcrun", "--sdk", "iphonesimulator", "--show-sdk-version"]),

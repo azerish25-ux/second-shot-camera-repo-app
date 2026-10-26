@@ -18,9 +18,13 @@ concurrency:
   group: ios-ci-${{ github.ref }}
   cancel-in-progress: true
 
+# The runner image rolls without notice, so the workflow selects an Xcode 26.x
+# rather than trusting one path: the preferred build is used when present, the
+# newest 26.x otherwise, and the choice plus the full inventory goes into the job
+# summary. No supported Xcode 26.x means a hard failure, never a silent guess.
 env:
-  DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
-  SECOND_SHOT_EXPECTED_XCODE: "26.6"
+  SECOND_SHOT_PREFERRED_XCODE: /Applications/Xcode_26.6.app
+  SECOND_SHOT_XCODE_SERIES: Xcode_26
 
 jobs:
   simulator:
@@ -33,23 +37,57 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Verify the pinned Xcode toolchain
+      - name: Select and report the Xcode toolchain
         run: |
           set -euo pipefail
-          if [[ ! -d "${DEVELOPER_DIR}" ]]; then
-            echo "::error::Expected Xcode at ${DEVELOPER_DIR}. Installed:"
+          mkdir -p artifacts/ios
+          {
+            echo "### Xcode toolchain"
+            echo
+            echo '```'
             ls /Applications | sort
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+          SELECTED="${SECOND_SHOT_PREFERRED_XCODE}"
+          if [[ ! -d "${SELECTED}" ]]; then
+            echo "::warning::${SECOND_SHOT_PREFERRED_XCODE} is absent from this runner image; falling back to the newest installed ${SECOND_SHOT_XCODE_SERIES}."
+            SELECTED="$(ls -d /Applications/${SECOND_SHOT_XCODE_SERIES}*.app 2>/dev/null | sort -V | tail -1 || true)"
+          fi
+          if [[ -z "${SELECTED}" || ! -d "${SELECTED}" ]]; then
+            echo "::error::No supported ${SECOND_SHOT_XCODE_SERIES}.x is installed on this runner. The job summary lists what is available; update .github/workflows/ios-ci.yml and docs/CI_WORKFLOW.md deliberately."
+            echo "no-supported-xcode" > artifacts/ios/toolchain.status
             exit 1
           fi
-          xcodebuild -version
-          ACTUAL="$(xcodebuild -version | head -1 | awk '{print $2}')"
-          if [[ "${ACTUAL}" != "${SECOND_SHOT_EXPECTED_XCODE}" ]]; then
-            echo "::error::Xcode version ${ACTUAL} does not match expected ${SECOND_SHOT_EXPECTED_XCODE}. Review docs/CI_WORKFLOW.md before changing the pin."
+
+          echo "DEVELOPER_DIR=${SELECTED}/Contents/Developer" >> "${GITHUB_ENV}"
+          export DEVELOPER_DIR="${SELECTED}/Contents/Developer"
+          # Each probe is allowed to fail so its reason reaches the summary
+          # before the job stops; a genuinely unusable Xcode still fails below.
+          {
+            echo "--- xcodebuild -version"
+            xcodebuild -version || echo "xcodebuild -version failed with $?"
+            echo "--- simulator SDK"
+            xcrun --sdk iphonesimulator --show-sdk-version || echo "simulator SDK probe failed with $?"
+            echo "--- swift"
+            swift --version || echo "swift probe failed with $?"
+            echo "--- python3"
+            python3 --version || echo "python3 probe failed with $?"
+          } 2>&1 | tee artifacts/ios/toolchain.txt
+          {
+            echo
+            echo "Selected: \`${SELECTED}\`"
+            echo
+            echo '```'
+            cat artifacts/ios/toolchain.txt
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+          if ! xcodebuild -version > /dev/null 2>&1; then
+            echo "::error::xcodebuild is unusable with ${DEVELOPER_DIR}; the toolchain block in the job summary records what happened."
+            echo "xcodebuild-unusable" > artifacts/ios/toolchain.status
             exit 1
           fi
-          xcrun --sdk iphonesimulator --show-sdk-version
-          swift --version
-          python3 --version
 
       - name: Capture environment and simulator inventory
         run: python3 -B scripts/ci/capture_environment.py
@@ -77,14 +115,26 @@ jobs:
         if: always()
         run: |
           set +e
-          for log in artifacts/ios/xcodegen.log artifacts/ios/xcodebuild.log artifacts/ios/swift-test.log; do
+          {
+            echo "### Failure diagnostics"
+            echo
+          } >> "${GITHUB_STEP_SUMMARY}"
+          for log in artifacts/ios/toolchain.txt artifacts/ios/xcodegen.log artifacts/ios/xcodebuild.log artifacts/ios/swift-test.log artifacts/ios/collection.json; do
             [[ -f "$log" ]] || continue
             echo "---- $log (first errors) ----"
-            grep -E "error: " "$log" | head -10 | while IFS= read -r line; do
+            grep -E "error: |FAIL " "$log" | head -10 | while IFS= read -r line; do
               echo "::error::$log: $line"
             done
             echo "---- $log (tail) ----"
-            tail -n 25 "$log"
+            tail -n 30 "$log"
+            {
+              echo "<details><summary>${log}</summary>"
+              echo
+              echo '```'
+              tail -n 60 "$log"
+              echo '```'
+              echo "</details>"
+            } >> "${GITHUB_STEP_SUMMARY}"
           done
           exit 0
 

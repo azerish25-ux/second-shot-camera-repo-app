@@ -24,7 +24,7 @@ Checked against upstream metadata on **2026-10-26**:
 | Item | Repository pin / behavior |
 | --- | --- |
 | Hosted runner | `macos-26`, standard runner label; no paid large-runner requirement |
-| Xcode | `/Applications/Xcode_26.6.app/Contents/Developer`; exact version asserted |
+| Xcode | Prefers `/Applications/Xcode_26.6.app`; falls back to the newest installed `Xcode_26*.app` and fails if none exists |
 | SDK/runtime | Record selected SDK; discover the newest installed compatible iOS runtime and an available iPhone |
 | Deployment target | iOS 17.0; testing a current runtime is not minimum-OS coverage |
 | Swift language mode | Swift 5 for the initial foundation; compiler version recorded |
@@ -32,7 +32,7 @@ Checked against upstream metadata on **2026-10-26**:
 | checkout | `11d5960a326750d5838078e36cf38b85af677262` (v4 reference checked) |
 | upload-artifact | `ea165f8d65b6e75b540449e92b4886f43607fa02` (v4 reference checked) |
 | Project | `project.yml` generates ignored `SecondShot.xcodeproj` and `.generated/` |
-| Scheme | `SecondShot` with `SecondShotAppTests` and `SecondShotUITests` |
+| Scheme | `SecondShot` with `SecondShotCoreTests`, `SecondShotAppTests` and `SecondShotUITests` |
 
 Hosted images evolve; the label is not an immutable OS image. Environment manifests
 record the actual image/Xcode/SDK. Missing Xcode or simulators is an infrastructure
@@ -41,12 +41,17 @@ a paid runner or claim device coverage. Review upstream metadata, update the pin
 in a small commit, and rerun. App Store SDK rules must be rechecked separately at
 release even when this simulator baseline uses Xcode 26.
 
-The reviewed image also lists Xcode 26.5. If 26.6 becomes unavailable, 26.5 is a
-candidate **manual** fallback: first recheck its path, SDK and available runtimes,
-then update both `DEVELOPER_DIR` and `SECOND_SHOT_EXPECTED_XCODE` in a reviewed
-commit and rerun all tests. There is no automatic fallback. The command contract
-requires Xcode 16.3 or newer for modern xcresult attachment export, and the package
-requires Swift 5.9 or newer; those are compatibility floors, not a claim of tested
+**Toolchain selection and drift.** Observed on 2026-10-26: two runs on the same
+`macos-26` label passed at 17:14 and failed at 17:53 in the old exact-version step,
+with no repository change in between — the image rolled under the workflow. The
+step now selects `Xcode_26.6.app` when present, otherwise the newest installed
+`Xcode_26*.app`, exports that `DEVELOPER_DIR` to later steps, and writes the full
+`/Applications` inventory plus the actual `xcodebuild`/SDK/Swift versions into the
+job summary. A drift therefore shows up as a warning with evidence instead of an
+unexplained failure. It still fails, with the inventory attached, when no Xcode 26.x
+exists: running on an unreviewed major version is never automatic. The 26.x series
+floor is a project decision — Xcode 16.3+ is the compatibility floor for modern
+xcresult attachment export and Swift 5.9+ for the package — not a claim of tested
 older-Xcode support or eligibility for a current App Store submission.
 
 The bootstrap deliberately avoids Homebrew upgrades, mutable dependency versions,
@@ -96,7 +101,7 @@ files that do not yet exist. Do not add empty files to satisfy link checks.
 On a Mac with the reviewed Xcode installed:
 
 ```bash
-export DEVELOPER_DIR=/Applications/Xcode_26.6.app/Contents/Developer
+export DEVELOPER_DIR=/Applications/Xcode_26.6.app/Contents/Developer  # or the newest installed Xcode 26.x
 export SECOND_SHOT_EXPECTED_XCODE=26.6
 python3 -B scripts/ci/capture_environment.py
 bash scripts/ci/install_xcodegen.sh
