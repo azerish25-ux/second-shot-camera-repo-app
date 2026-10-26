@@ -99,7 +99,7 @@ struct ModeBadge: View {
         .clipShape(Capsule())
         .overlay(Capsule().stroke(SSColor.guide.opacity(0.35), lineWidth: 1))
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(label)
+        .accessibilityLabel(Text(label))
     }
 }
 
@@ -153,7 +153,7 @@ struct TrackingBadge: View {
         .clipShape(Capsule())
         .overlay(Capsule().stroke(tint.opacity(0.4), lineWidth: 1))
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(title). \(detail ?? "")")
+        .accessibilityLabel(Text(detail.map { "\(title). \($0)" } ?? title))
     }
 }
 
