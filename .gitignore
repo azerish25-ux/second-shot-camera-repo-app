@@ -1,0 +1,27 @@
+# Swift Package Manager
+.build/
+.swiftpm/
+Package.resolved
+
+# Generated Xcode project and plists (project.yml is the source of truth)
+SecondShot.xcodeproj/
+.generated/
+DerivedData/
+*.xcresult
+
+# CI evidence and local tooling
+artifacts/
+.tools/
+
+# macOS
+.DS_Store
+
+# Secrets — never commit keys, certificates or provisioning profiles
+*.p12
+*.mobileprovision
+.env
+.env.*
+
+# Python bytecode
+__pycache__/
+*.pyc

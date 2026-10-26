@@ -1,0 +1,39 @@
+name: Repository checks
+
+# Cheap structural/documentation checks. Passing this job alone is not an iOS
+# build result and never proves simulator or device behaviour.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: repository-checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  repository-checks:
+    name: Docs, workflows, project spec and CI helpers
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4 pinned
+        with:
+          persist-credentials: false
+
+      - name: Show host toolchain
+        run: |
+          python3 --version
+          uname -a
+
+      - name: Validate documentation, links, workflows and project spec
+        run: python3 -B scripts/ci/check_repository.py
+
+      - name: Test the CI helper scripts
+        run: python3 -B -m unittest discover -s scripts -p 'test_*.py' -v

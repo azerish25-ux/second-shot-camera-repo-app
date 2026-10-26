@@ -1,0 +1,83 @@
+name: iOS Simulator CI
+
+# Generates the Xcode project, compiles the real app, runs pure Swift domain
+# tests and XCTest unit/UI journeys on an iPhone Simulator, then validates the
+# uploaded evidence. A simulator is not a physical iPhone: AR tracking, camera
+# output, audio sync and thermal behaviour remain device gates.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+  SECOND_SHOT_EXPECTED_XCODE: "26.6"
+
+jobs:
+  simulator:
+    name: Build and test on iPhone Simulator
+    runs-on: macos-26
+    timeout-minutes: 35
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4 pinned
+        with:
+          persist-credentials: false
+
+      - name: Verify the pinned Xcode toolchain
+        run: |
+          set -euo pipefail
+          if [[ ! -d "${DEVELOPER_DIR}" ]]; then
+            echo "::error::Expected Xcode at ${DEVELOPER_DIR}. Installed:"
+            ls /Applications | sort
+            exit 1
+          fi
+          xcodebuild -version
+          ACTUAL="$(xcodebuild -version | head -1 | awk '{print $2}')"
+          if [[ "${ACTUAL}" != "${SECOND_SHOT_EXPECTED_XCODE}" ]]; then
+            echo "::error::Xcode version ${ACTUAL} does not match expected ${SECOND_SHOT_EXPECTED_XCODE}. Review docs/CI_WORKFLOW.md before changing the pin."
+            exit 1
+          fi
+          xcrun --sdk iphonesimulator --show-sdk-version
+          swift --version
+          python3 --version
+
+      - name: Capture environment and simulator inventory
+        run: python3 -B scripts/ci/capture_environment.py
+
+      - name: Install pinned XcodeGen
+        run: bash scripts/ci/install_xcodegen.sh
+
+      - name: Generate the Xcode project
+        run: .tools/xcodegen/xcodegen generate --spec project.yml
+
+      - name: Run pure Swift domain tests
+        run: |
+          set -o pipefail
+          mkdir -p artifacts/ios
+          swift test --enable-code-coverage 2>&1 | tee artifacts/ios/swift-test.log
+
+      - name: Build and run simulator unit and UI tests
+        run: bash scripts/ci/run_simulator_tests.sh
+
+      - name: Collect and validate evidence
+        if: always()
+        run: python3 -B scripts/ci/collect_results.py
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4 pinned
+        with:
+          name: ios-evidence-${{ github.sha }}
+          path: artifacts/
+          if-no-files-found: warn
+          retention-days: 14
